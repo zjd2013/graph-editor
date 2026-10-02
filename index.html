@@ -120,12 +120,6 @@
             <rect id="canvas-background" class="canvas-background" x="0" y="0" width="1200" height="800" fill="url(#canvas-grid)" />
             <g id="world"></g>
           </svg>
-          <div id="empty-canvas-prompt" class="empty-canvas-prompt" hidden>
-            <div class="empty-illustration" aria-hidden="true"><span></span><span></span><span></span><i></i><b></b></div>
-            <strong>从一个顶点开始</strong>
-            <span>在侧栏输入标签 u，或选择「顶点」工具后点击画布。</span>
-            <button type="button" id="empty-add-button">添加第一个顶点</button>
-          </div>
           <div id="connect-toast" class="connect-toast" hidden></div>
           <div class="canvas-bottomline">
             <div id="mode-hint" class="mode-hint"><span class="hint-icon">↖</span> 拖动顶点调整布局 · 滚轮缩放画布</div>
@@ -150,7 +144,6 @@
         </div>
         <div class="inspector-tabs" role="tablist" aria-label="侧栏视图">
           <button class="inspector-tab active" type="button" data-tab="properties" role="tab" aria-selected="true">属性</button>
-          <button class="inspector-tab" type="button" data-tab="create" role="tab" aria-selected="false">添加</button>
           <button class="inspector-tab" type="button" data-tab="structure" role="tab" aria-selected="false">图结构 <span id="structure-count">13</span></button>
         </div>
         <div id="inspector-content" class="inspector-content"></div>
