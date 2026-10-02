@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f6f8fb" />
+  <meta name="description" content="一个轻巧、可视化的混合图编辑器。" />
+  <title>图谱编辑器</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 36 36" fill="none">
+            <path d="M9 25.5 17.8 10l9.4 15.5M9.8 25h17" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" />
+            <circle cx="9" cy="26" r="3.2" fill="#70D7C1" stroke="white" stroke-width="1.5" />
+            <circle cx="18" cy="9" r="3.2" fill="#F5B964" stroke="white" stroke-width="1.5" />
+            <circle cx="27" cy="26" r="3.2" fill="#9EABFF" stroke="white" stroke-width="1.5" />
+          </svg>
+        </div>
+        <div class="brand-copy">
+          <strong>Graph Studio</strong>
+          <span>图谱编辑器</span>
+        </div>
+      </div>
+
+      <div class="document-title-wrap">
+        <span class="title-divider" aria-hidden="true"></span>
+        <span id="document-title" class="document-title">路径与流量</span>
+        <span class="saved-status"><i class="status-dot"></i><span id="save-status">本地自动保存</span></span>
+      </div>
+
+      <div class="top-actions">
+        <div class="history-actions">
+          <button id="undo-button" class="icon-button" type="button" title="撤销 (Ctrl/⌘ Z)" aria-label="撤销">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5M4.5 9H14a5.5 5.5 0 0 1 0 11h-2" /></svg>
+          </button>
+          <button id="redo-button" class="icon-button" type="button" title="重做 (Ctrl/⌘ Shift Z)" aria-label="重做">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5m4.5 5H10a5.5 5.5 0 0 0 0 11h2" /></svg>
+          </button>
+        </div>
+        <span class="top-separator" aria-hidden="true"></span>
+        <button id="import-button" class="secondary-button" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5M5 14v5h14v-5" /></svg>
+          <span>导入</span>
+        </button>
+        <div class="export-wrap">
+          <button id="export-toggle" class="primary-button" type="button" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M5 16v4h14v-4" /></svg>
+            <span>导出</span>
+            <svg class="chevron-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+          </button>
+          <div id="export-menu" class="export-menu" hidden>
+            <button type="button" data-export="json"><span class="file-badge json-badge">{ }</span><span><strong>JSON 数据</strong><small>保存并稍后继续编辑</small></span></button>
+            <button type="button" data-export="svg"><span class="file-badge svg-badge">SVG</span><span><strong>SVG 矢量图</strong><small>适合文档与打印</small></span></button>
+            <button type="button" data-export="png"><span class="file-badge png-badge">PNG</span><span><strong>PNG 图片</strong><small>导出高清画布</small></span></button>
+          </div>
+        </div>
+        <input id="import-file" type="file" accept=".json,application/json" hidden />
+      </div>
+    </header>
+
+    <main class="editor-layout">
+      <nav class="tool-rail" aria-label="编辑工具">
+        <div class="tool-group">
+          <span class="rail-label">工具</span>
+          <button class="tool-button active" type="button" data-mode="select" title="选择 / 拖动 (V)" aria-label="选择或拖动顶点">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 3 14 10-6.3 1.2L10 20 5 3Z" /></svg>
+            <span>选择</span>
+            <kbd>V</kbd>
+          </button>
+          <button class="tool-button" type="button" data-mode="node" title="添加顶点 (N)" aria-label="添加顶点">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 8v8M8 12h8" /></svg>
+            <span>顶点</span>
+            <kbd>N</kbd>
+          </button>
+          <button class="tool-button" type="button" data-mode="edge" title="连接顶点 (E)" aria-label="连接顶点">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="17.5" r="3" /><circle cx="18" cy="6.5" r="3" /><path d="m8.2 15.5 7.6-7" /></svg>
+            <span>连边</span>
+            <kbd>E</kbd>
+          </button>
+        </div>
+        <div class="rail-bottom">
+          <button id="help-button" class="rail-help" type="button" title="快捷操作提示" aria-label="快捷操作提示">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9.7 9a2.4 2.4 0 1 1 4.2 1.6c-1.2 1.1-1.9 1.4-1.9 3M12 17.3v.1" /></svg>
+          </button>
+        </div>
+      </nav>
+
+      <section class="canvas-stage" aria-label="图编辑画布">
+        <div class="canvas-topline">
+          <div class="graph-count-pill">
+            <span class="count-icon" aria-hidden="true"><i></i><i></i><i></i><b></b></span>
+            <span><strong id="node-count">5</strong> 个顶点</span>
+            <span class="count-divider">/</span>
+            <span><strong id="edge-count">8</strong> 条边</span>
+          </div>
+          <div class="canvas-tools">
+            <button id="grid-toggle" class="canvas-tool-button is-on" type="button" title="显示 / 隐藏网格" aria-label="显示或隐藏网格">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 10.5h16M10.5 4v16M4 16.5h16M16.5 4v16" /></svg>
+            </button>
+            <span class="canvas-tool-separator"></span>
+            <button id="fit-button" class="canvas-tool-button fit-button" type="button" title="适应画布" aria-label="适应画布">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m0-4 6 6m6-6h4v4m0-4-6 6M4 16v4h4m-4 0 6-6m10 2v4h-4m4 0-6-6" /></svg>
+              <span>适应画布</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="canvas-surface">
+          <svg id="graph-canvas" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet" role="application" aria-label="可交互的图结构画布">
+            <defs>
+              <pattern id="canvas-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+                <path d="M 28 0 L 0 0 0 28" fill="none" stroke="#e6ebf2" stroke-width="1" />
+              </pattern>
+            </defs>
+            <rect id="canvas-background" class="canvas-background" x="0" y="0" width="1200" height="800" fill="url(#canvas-grid)" />
+            <g id="world"></g>
+          </svg>
+          <div id="empty-canvas-prompt" class="empty-canvas-prompt" hidden>
+            <div class="empty-illustration" aria-hidden="true"><span></span><span></span><span></span><i></i><b></b></div>
+            <strong>从一个顶点开始</strong>
+            <span>选择左侧「顶点」工具，然后在画布上点击。</span>
+            <button type="button" id="empty-add-button">添加第一个顶点</button>
+          </div>
+          <div id="connect-toast" class="connect-toast" hidden></div>
+          <div class="canvas-bottomline">
+            <div id="mode-hint" class="mode-hint"><span class="hint-icon">↖</span> 拖动顶点调整布局 · 滚轮缩放画布</div>
+            <div class="zoom-control">
+              <button id="zoom-out" type="button" aria-label="缩小" title="缩小">−</button>
+              <span id="zoom-label">100%</span>
+              <button id="zoom-in" type="button" aria-label="放大" title="放大">+</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="inspector" aria-label="属性面板">
+        <div class="inspector-heading">
+          <div>
+            <span class="panel-eyebrow">WORKSPACE</span>
+            <h1 id="inspector-title">图属性</h1>
+          </div>
+          <button id="clear-selection" class="clear-selection-button" type="button" title="取消选择" aria-label="取消选择" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" /></svg>
+          </button>
+        </div>
+        <div class="inspector-tabs" role="tablist" aria-label="侧栏视图">
+          <button class="inspector-tab active" type="button" data-tab="properties" role="tab" aria-selected="true">属性</button>
+          <button class="inspector-tab" type="button" data-tab="structure" role="tab" aria-selected="false">图结构 <span id="structure-count">13</span></button>
+        </div>
+        <div id="inspector-content" class="inspector-content"></div>
+        <div class="inspector-footnote"><span class="tiny-shield" aria-hidden="true">◈</span> 图数据仅保存在此浏览器中</div>
+      </aside>
+    </main>
+  </div>
+</body>
+</html>
