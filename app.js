@@ -1698,6 +1698,13 @@
         return;
       }
 
+      if (entry.kind === 'node' && currentNode
+        && (fromResult.node.id === currentNode.id || toResult.node.id === currentNode.id)
+        && currentNode.weight) {
+        currentNode.weight = '';
+        updatedNodes += 1;
+      }
+
       const directionFlag = tokens.length === 3 ? tokens[2] : tokens[3];
       const directed = directionFlag === '0';
       const weight = tokens.length === 4 ? tokens[2] : '';
