@@ -748,6 +748,7 @@
       mathSvg.setAttribute('y', String(y - rendered.height / 2));
       mathSvg.setAttribute('width', String(rendered.width));
       mathSvg.setAttribute('height', String(rendered.height));
+      mathSvg.removeAttribute('style');
       mathSvg.setAttribute('color', fill);
       mathSvg.removeAttribute('aria-hidden');
       mathSvg.setAttribute('role', 'img');
@@ -910,7 +911,7 @@
       });
       const labelLayout = measureRichTextLayout(edge.weight, '700 12px DM Sans, Manrope, sans-serif', 12);
       const width = Math.max(31, labelLayout.width + 17);
-      const height = Math.max(22, labelLayout.height + 10);
+      const height = Math.max(22, labelLayout.height + 24);
       labelGroup.appendChild(svgElement('rect', {
         class: 'edge-label-bg',
         x: -width / 2,
@@ -967,6 +968,49 @@
       }));
     }
     return group;
+  }
+
+  function fitMathEdgeLabelBackgrounds() {
+    $$('.edge-label', world).forEach((labelGroup) => {
+      const labelText = $('.edge-label-text', labelGroup);
+      const background = $('.edge-label-bg', labelGroup);
+      if (!labelText?.querySelector('svg') || !background || typeof labelText.getBBox !== 'function') return;
+
+      try {
+        const bounds = labelText.getBBox();
+        if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) return;
+        const x = Number(background.getAttribute('x')) || 0;
+        const y = Number(background.getAttribute('y')) || 0;
+        const width = Number(background.getAttribute('width')) || 31;
+        const height = Number(background.getAttribute('height')) || 22;
+        const paddingX = 8.5;
+        const paddingY = 12;
+        const halfWidth = Math.max(
+          15.5,
+          Math.abs(x),
+          Math.abs(x + width),
+          Math.abs(bounds.x - paddingX),
+          Math.abs(bounds.x + bounds.width + paddingX),
+        );
+        const halfHeight = Math.max(
+          11,
+          Math.abs(y),
+          Math.abs(y + height),
+          Math.abs(bounds.y - paddingY),
+          Math.abs(bounds.y + bounds.height + paddingY),
+        );
+        if (halfWidth * 2 > width + 0.5) {
+          background.setAttribute('x', String(-halfWidth));
+          background.setAttribute('width', String(halfWidth * 2));
+        }
+        if (halfHeight * 2 > height + 0.5) {
+          background.setAttribute('y', String(-halfHeight));
+          background.setAttribute('height', String(halfHeight * 2));
+        }
+      } catch (error) {
+        // SVG getBBox can be unavailable for detached or unsupported SVG nodes.
+      }
+    });
   }
 
   function renderAnnotationFrames(radius) {
@@ -1028,6 +1072,7 @@
     graph.nodes.forEach((node) => fragments.appendChild(renderNode(node, radius)));
     world.replaceChildren(fragments);
     world.setAttribute('transform', `translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
+    fitMathEdgeLabelBackgrounds();
     canvasSurface.dataset.mode = mode;
     $('#canvas-background').classList.toggle('grid-hidden', !$('#grid-toggle').classList.contains('is-on'));
     updateZoomLabel();
