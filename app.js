@@ -1575,6 +1575,22 @@
     }
   }
 
+  function applyPendingNodeToEdgeConversions() {
+    const entryIds = commandEntries.filter((entry) => {
+      if (entry.kind !== 'node' || entry.text === entry.appliedText) return false;
+      try {
+        const previousTokenCount = tokenizeCommandLine(entry.appliedText).length;
+        const currentTokenCount = tokenizeCommandLine(entry.text).length;
+        return previousTokenCount >= 1 && previousTokenCount <= 2
+          && currentTokenCount >= 3 && currentTokenCount <= 4;
+      } catch (_) {
+        return false;
+      }
+    }).map((entry) => entry.id);
+    if (!entryIds.length) return false;
+    return applyBulkInput(entryIds);
+  }
+
   function applyBulkInput(entryIds = null) {
     reconcileCommandInput();
     const targetIds = entryIds ? new Set(entryIds) : null;
@@ -2756,7 +2772,10 @@
       event.currentTarget.setAttribute('aria-label', collapsed ? '展开输入栏' : '收起输入栏');
       event.currentTarget.title = collapsed ? '展开输入栏' : '收起输入栏';
     });
-    commandInput.addEventListener('input', reconcileCommandInput);
+    commandInput.addEventListener('input', (event) => {
+      reconcileCommandInput();
+      if (!event.isComposing) applyPendingNodeToEdgeConversions();
+    });
     commandInput.addEventListener('keydown', (event) => {
       if (event.isComposing) return;
       if (event.key === 'Enter') {
