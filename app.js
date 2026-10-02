@@ -26,6 +26,18 @@
     { hex: '#EC4899', name: '粉色' },
   ];
   const COLOR_SET = new Set(COLORS.map((color) => color.hex));
+  const EDGE_TYPE_STYLES = {
+    tree: { label: '树边', color: '#000000' },
+    back: { label: '返祖边', color: '#EF4444' },
+    forward: { label: '前向边', color: '#EAB308' },
+    cross: { label: '横叉边', color: '#22C55E' },
+    backward: { label: '后向边', color: '#3B82F6' },
+  };
+  const COMPONENT_ANNOTATIONS = {
+    scc: { label: 'SCC', description: '强连通分量' },
+    vbcc: { label: 'VBCC', description: '点双连通分量' },
+    ebcc: { label: 'EBCC', description: '边双连通分量' },
+  };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -51,6 +63,7 @@
   let didLoadSavedGraph = false;
   let commandEntryCounter = 1;
   let graph = loadGraph();
+  let graphAnnotation = null;
   let commandEntries = loadCommandEntries();
   commandInput.value = serializeCommandEntries(commandEntries);
   let selected = null;
@@ -225,7 +238,7 @@
     const to = graph.nodes.find((node) => node.id === edge.to);
     const parts = [commandNodeToken(from || { id: edge.from }), commandNodeToken(to || { id: edge.to })];
     if (edge.weight) parts.push(commandToken(edge.weight));
-    parts.push(edge.directed ? '1' : '0');
+    parts.push(edge.directed ? '0' : '1');
     return parts.join(' ');
   }
 
@@ -271,6 +284,14 @@
             const validNode = entry.nodeIds.some((id) => graph.nodes.some((node) => node.id === id));
             const validEdge = entry.edgeIds.some((id) => graph.edges.some((edge) => edge.id === id));
             if ((entry.kind === 'node' && !validNode) || (entry.kind === 'edge' && !validEdge)) entry.kind = null;
+            if (entry.kind === 'edge' && entry.text === entry.appliedText) {
+              const edge = graph.edges.find((item) => entry.edgeIds.includes(item.id));
+              if (edge) {
+                const canonicalText = formatEdgeCommand(edge);
+                entry.text = canonicalText;
+                entry.appliedText = canonicalText;
+              }
+            }
             if (!entry.kind) {
               entry.nodeIds = [];
               entry.createdNodeIds = [];
@@ -446,6 +467,7 @@
   }
 
   function beginEdit() {
+    materializeGraphAnnotation();
     if (!activeEditBaseline) {
       activeEditBaseline = clone(graph);
       activeEditCommandBaseline = clone(commandEntries);
@@ -454,17 +476,25 @@
   }
 
   function commitMutation(action, options = {}) {
+    const removedAnnotation = materializeGraphAnnotation();
     finishEdit();
     const before = clone(graph);
     const commandsBefore = clone(commandEntries);
     action();
-    if (JSON.stringify(before) === JSON.stringify(graph)) return;
+    if (JSON.stringify(before) === JSON.stringify(graph)) {
+      if (removedAnnotation) renderAll();
+      return;
+    }
     pushUndo(before, commandsBefore);
     if (options.syncCommands !== false) synchronizeCommandEntries(before, graph);
     renderAll();
   }
 
   function undo() {
+    if (graphAnnotation) {
+      undoGraphAnnotation();
+      return;
+    }
     finishEdit();
     if (!undoStack.length) return;
     redoStack.push({ graph: clone(graph), commands: clone(commandEntries) });
@@ -480,6 +510,7 @@
   }
 
   function redo() {
+    clearGraphAnnotation({ restoreCamera: true, render: true });
     finishEdit();
     if (!redoStack.length) return;
     undoStack.push({ graph: clone(graph), commands: clone(commandEntries) });
@@ -502,7 +533,7 @@
   }
 
   function updateHistoryButtons() {
-    $('#undo-button').disabled = undoStack.length === 0 && !activeEditBaseline;
+    $('#undo-button').disabled = undoStack.length === 0 && !activeEditBaseline && !graphAnnotation;
     $('#redo-button').disabled = redoStack.length === 0;
   }
 
@@ -578,17 +609,28 @@
     return { x: x / length, y: y / length };
   }
 
+  function displayNodePosition(node) {
+    return graphAnnotation?.positions?.get(node.id) || { x: node.x, y: node.y };
+  }
+
+  function displayEdgeColor(edge) {
+    return graphAnnotation?.edgeColors?.get(edge.id) || edge.color;
+  }
+
   function edgeGeometry(edge, groupIndex, groupSize, radius) {
     const from = graph.nodes.find((node) => node.id === edge.from);
     const to = graph.nodes.find((node) => node.id === edge.to);
     if (!from || !to) return null;
 
+    const fromPosition = displayNodePosition(from);
+    const toPosition = displayNodePosition(to);
+
     if (from.id === to.id) {
       const expanded = Math.max(58, edge.length * 0.57) + groupIndex * 19;
-      const start = { x: from.x - radius * 0.55, y: from.y - radius * 0.82 };
-      const end = { x: from.x + radius * 0.55, y: from.y - radius * 0.82 };
-      const first = { x: from.x - radius - expanded * 0.42, y: from.y - radius - expanded };
-      const second = { x: from.x + radius + expanded * 0.42, y: from.y - radius - expanded };
+      const start = { x: fromPosition.x - radius * 0.55, y: fromPosition.y - radius * 0.82 };
+      const end = { x: fromPosition.x + radius * 0.55, y: fromPosition.y - radius * 0.82 };
+      const first = { x: fromPosition.x - radius - expanded * 0.42, y: fromPosition.y - radius - expanded };
+      const second = { x: fromPosition.x + radius + expanded * 0.42, y: fromPosition.y - radius - expanded };
       const label = pointForCubic(start, first, second, end, 0.5);
       return {
         path: `M ${start.x} ${start.y} C ${first.x} ${first.y}, ${second.x} ${second.y}, ${end.x} ${end.y}`,
@@ -598,22 +640,22 @@
       };
     }
 
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
+    const dx = toPosition.x - fromPosition.x;
+    const dy = toPosition.y - fromPosition.y;
     const centerDistance = Math.hypot(dx, dy) || 1;
     const canonicalSign = String(from.id).localeCompare(String(to.id)) <= 0 ? 1 : -1;
     const perpendicular = { x: (-dy / centerDistance) * canonicalSign, y: (dx / centerDistance) * canonicalSign };
     const offset = (groupIndex - (groupSize - 1) / 2) * 38;
     const control = {
-      x: (from.x + to.x) / 2 + perpendicular.x * offset,
-      y: (from.y + to.y) / 2 + perpendicular.y * offset,
+      x: (fromPosition.x + toPosition.x) / 2 + perpendicular.x * offset,
+      y: (fromPosition.y + toPosition.y) / 2 + perpendicular.y * offset,
     };
-    const startDirection = unitVector(control.x - from.x, control.y - from.y);
-    const endDirection = unitVector(to.x - control.x, to.y - control.y);
+    const startDirection = unitVector(control.x - fromPosition.x, control.y - fromPosition.y);
+    const endDirection = unitVector(toPosition.x - control.x, toPosition.y - control.y);
     const fromRadius = radius + from.borderWidth / 2 + 2;
     const toRadius = radius + to.borderWidth / 2 + 2;
-    const start = { x: from.x + startDirection.x * fromRadius, y: from.y + startDirection.y * fromRadius };
-    const end = { x: to.x - endDirection.x * toRadius, y: to.y - endDirection.y * toRadius };
+    const start = { x: fromPosition.x + startDirection.x * fromRadius, y: fromPosition.y + startDirection.y * fromRadius };
+    const end = { x: toPosition.x - endDirection.x * toRadius, y: toPosition.y - endDirection.y * toRadius };
     return {
       path: `M ${start.x} ${start.y} Q ${control.x} ${control.y}, ${end.x} ${end.y}`,
       label: pointForQuadratic(start, control, end, 0.5),
@@ -636,6 +678,7 @@
     if (!geometry) return null;
     const group = svgElement('g', { class: 'graph-edge', 'data-id': edge.id });
     const isSelected = selected?.type === 'edge' && selected.id === edge.id;
+    const edgeColor = displayEdgeColor(edge);
     const width = isSelected ? 3.1 : 2.5;
 
     if (isSelected) {
@@ -645,9 +688,9 @@
     const visible = svgElement('path', {
       class: 'edge-visible',
       d: geometry.path,
-      stroke: edge.color,
+      stroke: edgeColor,
       'stroke-width': width,
-      opacity: edge.style === 'dashed' ? 0.9 : 0.86,
+      opacity: graphAnnotation?.edgeColors?.has(edge.id) ? 1 : edge.style === 'dashed' ? 0.9 : 0.86,
     });
     if (edge.style === 'dashed') visible.setAttribute('stroke-dasharray', '8 7');
     group.appendChild(visible);
@@ -655,7 +698,7 @@
     if (edge.directed) {
       group.appendChild(svgElement('polygon', {
         points: arrowPolygon(geometry.arrowTip, geometry.arrowDirection),
-        fill: edge.color,
+        fill: edgeColor,
         class: 'edge-arrow',
       }));
     }
@@ -674,7 +717,7 @@
         width,
         height: 22,
         rx: 7,
-        stroke: edge.color,
+        stroke: edgeColor,
         'stroke-opacity': 0.26,
       }));
       const labelText = svgElement('text', { class: 'edge-label-text', fill: '#3F4D63', x: 0, y: 0 });
@@ -686,7 +729,8 @@
   }
 
   function renderNode(node, radius) {
-    const group = svgElement('g', { class: 'graph-node', 'data-id': node.id, transform: `translate(${node.x} ${node.y})` });
+    const position = displayNodePosition(node);
+    const group = svgElement('g', { class: 'graph-node', 'data-id': node.id, transform: `translate(${position.x} ${position.y})` });
     const isSelected = selected?.type === 'node' && selected.id === node.id;
     const isConnectOrigin = pendingFrom === node.id;
     if (isSelected) group.appendChild(svgElement('circle', { class: 'node-selection-ring', r: radius + 8 }));
@@ -725,6 +769,42 @@
     return group;
   }
 
+  function renderAnnotationFrames(radius) {
+    if (!graphAnnotation?.components?.length) return document.createDocumentFragment();
+    const fragments = document.createDocumentFragment();
+    graphAnnotation.components.forEach((component, index) => {
+      const nodes = component.nodeIds.map((id) => graph.nodes.find((node) => node.id === id)).filter(Boolean);
+      if (!nodes.length) return;
+      const positions = nodes.map(displayNodePosition);
+      const minX = Math.min(...positions.map((position) => position.x));
+      const maxX = Math.max(...positions.map((position) => position.x));
+      const minY = Math.min(...positions.map((position) => position.y));
+      const maxY = Math.max(...positions.map((position) => position.y));
+      const padX = radius + 18;
+      const padTop = radius + 25;
+      const padBottom = radius + 17;
+      const x = minX - padX;
+      const y = minY - padTop;
+      const frame = svgElement('g', { class: 'annotation-frame', 'pointer-events': 'none' });
+      frame.appendChild(svgElement('rect', {
+        x,
+        y,
+        width: Math.max(1, maxX - minX + padX * 2),
+        height: Math.max(1, maxY - minY + padTop + padBottom),
+        rx: 18,
+        fill: '#06B6D4',
+        'fill-opacity': 0.035,
+        stroke: '#06B6D4',
+        'stroke-width': 2.5,
+      }));
+      const title = svgElement('text', { class: 'annotation-frame-title', x: x + 10, y: y + 16 });
+      title.textContent = component.label || `${graphAnnotation.label} ${index + 1}`;
+      frame.appendChild(title);
+      fragments.appendChild(frame);
+    });
+    return fragments;
+  }
+
   function renderScene() {
     const radius = nodeRadius();
     const nodeOrder = new Map(graph.nodes.map((node, index) => [node.id, index]));
@@ -740,6 +820,7 @@
     });
 
     const fragments = document.createDocumentFragment();
+    fragments.appendChild(renderAnnotationFrames(radius));
     groups.forEach((edges) => edges.forEach((edge, index) => {
       const element = renderEdge(edge, index, edges.length, radius);
       if (element) fragments.appendChild(element);
@@ -776,9 +857,9 @@
           <span class="quick-action-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/></svg></span>
           <span><strong>添加顶点</strong><small>输入 u 或 u 点权</small></span>
         </button>
-        <button class="quick-action" type="button" data-command-example="u v 1">
+        <button class="quick-action" type="button" data-command-example="u v 0">
           <span class="quick-action-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="17.5" r="3"/><circle cx="18" cy="6.5" r="3"/><path d="m8.2 15.5 7.6-7"/></svg></span>
-          <span><strong>添加边</strong><small>输入 u v 1 / u v w 1</small></span>
+          <span><strong>添加边</strong><small>输入 u v 0 / u v w 0</small></span>
         </button>
       </div>
       <div class="eyebrow-label">编辑提示</div>
@@ -1138,6 +1219,7 @@
   function renderAll() {
     renderScene();
     updateHeader();
+    updateAnnotationToolbar();
     updateHistoryButtons();
     renderInspector();
     persistGraph();
@@ -1618,7 +1700,7 @@
       }
 
       const directionFlag = tokens.length === 3 ? tokens[2] : tokens[3];
-      const directed = directionFlag === '1';
+      const directed = directionFlag === '0';
       const weight = tokens.length === 4 ? tokens[2] : '';
       const createdNodeIds = [...new Set([fromResult, toResult]
         .filter((result) => result.created)
@@ -1793,7 +1875,7 @@
         id: node.id,
         pointerId: event.pointerId,
         start: eventToWorld(event),
-        original: { x: node.x, y: node.y },
+        original: displayNodePosition(node),
         before: clone(graph),
         moved: false,
       };
@@ -1819,6 +1901,7 @@
       const nextX = drag.original.x + point.x - drag.start.x;
       const nextY = drag.original.y + point.y - drag.start.y;
       if (!drag.moved && Math.hypot(nextX - drag.original.x, nextY - drag.original.y) < 2) return;
+      materializeGraphAnnotation();
       drag.moved = true;
       selected = { type: 'node', id: node.id };
       if (!drag.captured) {
@@ -1921,10 +2004,11 @@
     }
     const radius = nodeRadius();
     const padding = Math.max(92, radius + 74);
-    const minX = Math.min(...graph.nodes.map((node) => node.x)) - padding;
-    const maxX = Math.max(...graph.nodes.map((node) => node.x)) + padding;
-    const minY = Math.min(...graph.nodes.map((node) => node.y)) - padding - (graph.edges.some((edge) => edge.from === edge.to) ? 65 : 0);
-    const maxY = Math.max(...graph.nodes.map((node) => node.y)) + padding;
+    const positions = graph.nodes.map(displayNodePosition);
+    const minX = Math.min(...positions.map((position) => position.x)) - padding;
+    const maxX = Math.max(...positions.map((position) => position.x)) + padding;
+    const minY = Math.min(...positions.map((position) => position.y)) - padding - (graph.edges.some((edge) => edge.from === edge.to) ? 65 : 0);
+    const maxY = Math.max(...positions.map((position) => position.y)) + padding;
     const boundsWidth = Math.max(1, maxX - minX);
     const boundsHeight = Math.max(1, maxY - minY);
     const scale = clamp(Math.min((VIEW_WIDTH - 100) / boundsWidth, (VIEW_HEIGHT - 100) / boundsHeight), 0.35, 1.55);
@@ -1932,6 +2016,449 @@
     camera.x = (VIEW_WIDTH - (minX + maxX) * scale) / 2;
     camera.y = (VIEW_HEIGHT - (minY + maxY) * scale) / 2;
     renderScene();
+  }
+
+  function makeUnderlyingAdjacency(ignoreDirection = false) {
+    const adjacency = new Map(graph.nodes.map((node) => [node.id, []]));
+    graph.edges.forEach((edge) => {
+      if (!adjacency.has(edge.from) || !adjacency.has(edge.to)) return;
+      adjacency.get(edge.from).push({ edge, to: edge.to });
+      if ((ignoreDirection || !edge.directed) && edge.from !== edge.to) adjacency.get(edge.to).push({ edge, to: edge.from });
+    });
+    return adjacency;
+  }
+
+  function sortComponents(components) {
+    const nodeOrder = new Map(graph.nodes.map((node, index) => [node.id, index]));
+    return components
+      .map((component) => [...new Set(component)].sort((a, b) => nodeOrder.get(a) - nodeOrder.get(b)))
+      .filter((component) => component.length)
+      .sort((a, b) => nodeOrder.get(a[0]) - nodeOrder.get(b[0]));
+  }
+
+  function findStronglyConnectedComponents() {
+    const outgoing = new Map(graph.nodes.map((node) => [node.id, []]));
+    const incoming = new Map(graph.nodes.map((node) => [node.id, []]));
+    const addArc = (from, to) => {
+      if (!outgoing.has(from) || !outgoing.has(to)) return;
+      outgoing.get(from).push(to);
+      incoming.get(to).push(from);
+    };
+    graph.edges.forEach((edge) => {
+      addArc(edge.from, edge.to);
+      if (!edge.directed && edge.from !== edge.to) addArc(edge.to, edge.from);
+    });
+
+    const visited = new Set();
+    const finishOrder = [];
+    graph.nodes.forEach((node) => {
+      if (visited.has(node.id)) return;
+      visited.add(node.id);
+      const stack = [{ id: node.id, next: 0 }];
+      while (stack.length) {
+        const top = stack[stack.length - 1];
+        const neighbors = outgoing.get(top.id) || [];
+        if (top.next < neighbors.length) {
+          const neighbor = neighbors[top.next];
+          top.next += 1;
+          if (!visited.has(neighbor)) {
+            visited.add(neighbor);
+            stack.push({ id: neighbor, next: 0 });
+          }
+        } else {
+          finishOrder.push(top.id);
+          stack.pop();
+        }
+      }
+    });
+
+    const assigned = new Set();
+    const components = [];
+    finishOrder.reverse().forEach((root) => {
+      if (assigned.has(root)) return;
+      const component = [];
+      const stack = [root];
+      assigned.add(root);
+      while (stack.length) {
+        const current = stack.pop();
+        component.push(current);
+        (incoming.get(current) || []).forEach((neighbor) => {
+          if (assigned.has(neighbor)) return;
+          assigned.add(neighbor);
+          stack.push(neighbor);
+        });
+      }
+      components.push(component);
+    });
+    return sortComponents(components);
+  }
+
+  function findVertexBiconnectedComponents() {
+    const adjacency = makeUnderlyingAdjacency(true);
+    const discovery = new Map();
+    const low = new Map();
+    const edgeStack = [];
+    const components = [];
+    let time = 0;
+
+    function popComponent(stopEdgeId) {
+      const componentNodes = new Set();
+      let edge;
+      do {
+        edge = edgeStack.pop();
+        if (!edge) break;
+        componentNodes.add(edge.from);
+        componentNodes.add(edge.to);
+      } while (edge.id !== stopEdgeId);
+      if (componentNodes.size) components.push([...componentNodes]);
+    }
+
+    function visit(nodeId, parentEdgeId) {
+      time += 1;
+      discovery.set(nodeId, time);
+      low.set(nodeId, time);
+      (adjacency.get(nodeId) || []).forEach((arc) => {
+        const edge = arc.edge;
+        if (edge.from === edge.to || edge.id === parentEdgeId) return;
+        if (!discovery.has(arc.to)) {
+          edgeStack.push(edge);
+          visit(arc.to, edge.id);
+          low.set(nodeId, Math.min(low.get(nodeId), low.get(arc.to)));
+          if (low.get(arc.to) >= discovery.get(nodeId)) popComponent(edge.id);
+        } else if (discovery.get(arc.to) < discovery.get(nodeId)) {
+          edgeStack.push(edge);
+          low.set(nodeId, Math.min(low.get(nodeId), discovery.get(arc.to)));
+        }
+      });
+    }
+
+    graph.nodes.forEach((node) => {
+      if (discovery.has(node.id)) return;
+      visit(node.id, null);
+      if (edgeStack.length) popComponent(null);
+    });
+    const included = new Set(components.flat());
+    graph.nodes.forEach((node) => {
+      if (!included.has(node.id)) components.push([node.id]);
+    });
+    return sortComponents(components);
+  }
+
+  function findEdgeBiconnectedComponents() {
+    const adjacency = makeUnderlyingAdjacency(true);
+    const discovery = new Map();
+    const low = new Map();
+    const bridges = new Set();
+    let time = 0;
+
+    function visit(nodeId, parentEdgeId) {
+      time += 1;
+      discovery.set(nodeId, time);
+      low.set(nodeId, time);
+      (adjacency.get(nodeId) || []).forEach((arc) => {
+        const edge = arc.edge;
+        if (edge.from === edge.to || edge.id === parentEdgeId) return;
+        if (!discovery.has(arc.to)) {
+          visit(arc.to, edge.id);
+          low.set(nodeId, Math.min(low.get(nodeId), low.get(arc.to)));
+          if (low.get(arc.to) > discovery.get(nodeId)) bridges.add(edge.id);
+        } else {
+          low.set(nodeId, Math.min(low.get(nodeId), discovery.get(arc.to)));
+        }
+      });
+    }
+
+    graph.nodes.forEach((node) => {
+      if (!discovery.has(node.id)) visit(node.id, null);
+    });
+
+    const visited = new Set();
+    const components = [];
+    graph.nodes.forEach((node) => {
+      if (visited.has(node.id)) return;
+      const component = [];
+      const stack = [node.id];
+      visited.add(node.id);
+      while (stack.length) {
+        const current = stack.pop();
+        component.push(current);
+        (adjacency.get(current) || []).forEach((arc) => {
+          if (bridges.has(arc.edge.id) || visited.has(arc.to)) return;
+          visited.add(arc.to);
+          stack.push(arc.to);
+        });
+      }
+      components.push(component);
+    });
+    return sortComponents(components);
+  }
+
+  function classifyTreeEdges() {
+    const adjacency = new Map(graph.nodes.map((node) => [node.id, []]));
+    graph.edges.forEach((edge) => {
+      if (!adjacency.has(edge.from) || !adjacency.has(edge.to)) return;
+      adjacency.get(edge.from).push({ edge, to: edge.to });
+      if (!edge.directed && edge.from !== edge.to) adjacency.get(edge.to).push({ edge, to: edge.from });
+    });
+
+    const discovery = new Map();
+    const finish = new Map();
+    const treeEdges = new Set();
+    let time = 0;
+    function visit(nodeId, parentEdgeId) {
+      time += 1;
+      discovery.set(nodeId, time);
+      (adjacency.get(nodeId) || []).forEach((arc) => {
+        if (!arc.edge.directed && arc.edge.id === parentEdgeId) return;
+        if (discovery.has(arc.to)) return;
+        treeEdges.add(arc.edge.id);
+        visit(arc.to, arc.edge.id);
+      });
+      time += 1;
+      finish.set(nodeId, time);
+    }
+    graph.nodes.forEach((node) => {
+      if (!discovery.has(node.id)) visit(node.id, null);
+    });
+
+    const isAncestor = (ancestorId, nodeId) => ancestorId !== nodeId
+      && discovery.get(ancestorId) < discovery.get(nodeId)
+      && finish.get(ancestorId) > finish.get(nodeId);
+    const edgeTypes = new Map();
+    graph.edges.forEach((edge) => {
+      let type;
+      if (treeEdges.has(edge.id)) type = 'tree';
+      else if (!edge.directed) type = 'back';
+      else if (edge.from === edge.to || isAncestor(edge.to, edge.from)) type = 'back';
+      else if (isAncestor(edge.from, edge.to)) type = 'forward';
+      else if (discovery.get(edge.from) < discovery.get(edge.to)) type = 'cross';
+      else type = 'backward';
+      edgeTypes.set(edge.id, type);
+    });
+    return new Map([...edgeTypes].map(([edgeId, type]) => [edgeId, EDGE_TYPE_STYLES[type].color]));
+  }
+
+  function makeComponentLayoutGroups(type, components) {
+    if (type !== 'vbcc') return components.map((nodeIds) => ({ nodeIds: [...nodeIds] }));
+    const parents = components.map((_, index) => index);
+    const find = (index) => {
+      if (parents[index] !== index) parents[index] = find(parents[index]);
+      return parents[index];
+    };
+    const union = (left, right) => {
+      const leftRoot = find(left);
+      const rightRoot = find(right);
+      if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+    };
+    const ownerByNode = new Map();
+    components.forEach((component, index) => component.forEach((nodeId) => {
+      if (ownerByNode.has(nodeId)) union(index, ownerByNode.get(nodeId));
+      else ownerByNode.set(nodeId, index);
+    }));
+    const groups = new Map();
+    components.forEach((component, index) => {
+      const root = find(index);
+      if (!groups.has(root)) groups.set(root, new Set());
+      component.forEach((nodeId) => groups.get(root).add(nodeId));
+    });
+    return [...groups.values()].map((nodeIds) => ({ nodeIds: [...nodeIds] }));
+  }
+
+  function layoutComponentPositions(type, components) {
+    const positions = new Map();
+    const layoutGroups = makeComponentLayoutGroups(type, components);
+    if (!layoutGroups.length) return positions;
+    const radius = nodeRadius();
+    const spacing = Math.max(112, radius * 2 + 54);
+    const groupGap = Math.max(110, radius * 2 + 76);
+    const maxRowWidth = Math.max(900, VIEW_WIDTH - 150);
+    const placements = [];
+    let cursorX = 0;
+    let cursorY = 0;
+    let rowHeight = 0;
+
+    layoutGroups.forEach((group) => {
+      const columns = Math.max(1, Math.ceil(Math.sqrt(group.nodeIds.length)));
+      const rows = Math.max(1, Math.ceil(group.nodeIds.length / columns));
+      const width = columns * spacing;
+      const height = rows * spacing;
+      if (cursorX > 0 && cursorX + width > maxRowWidth) {
+        cursorX = 0;
+        cursorY += rowHeight + groupGap;
+        rowHeight = 0;
+      }
+      placements.push({ ...group, x: cursorX, y: cursorY, width, height, columns, rows });
+      cursorX += width + groupGap;
+      rowHeight = Math.max(rowHeight, height);
+    });
+
+    const totalWidth = Math.max(...placements.map((placement) => placement.x + placement.width));
+    const totalHeight = Math.max(...placements.map((placement) => placement.y + placement.height));
+    const shiftX = VIEW_WIDTH / 2 - totalWidth / 2;
+    const shiftY = VIEW_HEIGHT / 2 - totalHeight / 2;
+    const nodeOrder = new Map(graph.nodes.map((node, index) => [node.id, index]));
+    const membershipCounts = new Map();
+    components.forEach((component) => component.forEach((nodeId) => {
+      membershipCounts.set(nodeId, (membershipCounts.get(nodeId) || 0) + 1);
+    }));
+
+    placements.forEach((placement) => {
+      let orderedNodeIds = [...placement.nodeIds].sort((a, b) => {
+        if (type === 'vbcc') {
+          const membershipDifference = (membershipCounts.get(b) || 0) - (membershipCounts.get(a) || 0);
+          if (membershipDifference) return membershipDifference;
+        }
+        return nodeOrder.get(a) - nodeOrder.get(b);
+      });
+      if (type === 'vbcc') {
+        const slots = orderedNodeIds.map((_, index) => ({
+          row: Math.floor(index / placement.columns),
+          column: index % placement.columns,
+        })).sort((a, b) => {
+          const centerColumn = (placement.columns - 1) / 2;
+          const centerRow = (placement.rows - 1) / 2;
+          const distanceA = (a.column - centerColumn) ** 2 + (a.row - centerRow) ** 2;
+          const distanceB = (b.column - centerColumn) ** 2 + (b.row - centerRow) ** 2;
+          return distanceA - distanceB || a.row - b.row || a.column - b.column;
+        });
+        orderedNodeIds.forEach((nodeId, index) => {
+          const slot = slots[index];
+          positions.set(nodeId, {
+            x: shiftX + placement.x + (slot.column + 0.5) * spacing,
+            y: shiftY + placement.y + (slot.row + 0.5) * spacing,
+          });
+        });
+      } else {
+        orderedNodeIds.forEach((nodeId, index) => {
+          const row = Math.floor(index / placement.columns);
+          const column = index % placement.columns;
+          positions.set(nodeId, {
+            x: shiftX + placement.x + (column + 0.5) * spacing,
+            y: shiftY + placement.y + (row + 0.5) * spacing,
+          });
+        });
+      }
+    });
+    return positions;
+  }
+
+  function updateAnnotationToolbar() {
+    const buttons = [
+      ['edge-types', '#mark-edge-types-button'],
+      ['scc', '#mark-scc-button'],
+      ['vbcc', '#mark-vbcc-button'],
+      ['ebcc', '#mark-ebcc-button'],
+    ];
+    buttons.forEach(([type, selector]) => {
+      const button = $(selector);
+      if (!button) return;
+      const active = graphAnnotation?.type === type;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.disabled = type === 'edge-types' ? graph.edges.length === 0 : graph.nodes.length === 0;
+    });
+    const undoButton = $('#undo-annotation-button');
+    if (undoButton) undoButton.disabled = !graphAnnotation;
+    const legend = $('#analysis-legend');
+    if (!legend) return;
+    if (!graphAnnotation) {
+      legend.textContent = '新标注会替换当前标注；SCC 按边方向计算，VBCC / EBCC 按忽略方向的无向图计算。';
+      return;
+    }
+    if (graphAnnotation.type === 'edge-types') {
+      const swatches = Object.values(EDGE_TYPE_STYLES).map((style) => (
+        `<span class="analysis-legend-item"><i class="analysis-legend-swatch" style="background:${style.color}"></i>${style.label}</span>`
+      )).join('');
+      legend.innerHTML = `${swatches}<small class="analysis-legend-note">蓝色后向边表示从 DFS 顺序较晚的顶点指向较早的非祖先顶点。</small>`;
+      return;
+    }
+    const metadata = COMPONENT_ANNOTATIONS[graphAnnotation.type];
+    legend.textContent = `${metadata.label}（${metadata.description}）：${graphAnnotation.components.length} 个青色框；布局仅影响显示，可撤销恢复。`;
+  }
+
+  function clearGraphAnnotation({ restoreCamera = true, render = false } = {}) {
+    if (!graphAnnotation) return false;
+    const originalCamera = graphAnnotation.originalCamera;
+    graphAnnotation = null;
+    if (restoreCamera) camera = { ...originalCamera };
+    updateAnnotationToolbar();
+    updateHistoryButtons();
+    if (render) renderScene();
+    return true;
+  }
+
+  function materializeGraphAnnotation() {
+    if (!graphAnnotation) return false;
+    graph.nodes.forEach((node) => {
+      const position = graphAnnotation.positions?.get(node.id);
+      if (!position) return;
+      node.x = position.x;
+      node.y = position.y;
+    });
+    graph.edges.forEach((edge) => {
+      if (edge.from === edge.to) return;
+      const from = graph.nodes.find((node) => node.id === edge.from);
+      const to = graph.nodes.find((node) => node.id === edge.to);
+      if (from && to) edge.length = Math.round(Math.hypot(to.x - from.x, to.y - from.y));
+    });
+    graphAnnotation = null;
+    updateAnnotationToolbar();
+    updateHistoryButtons();
+    return true;
+  }
+
+  function undoGraphAnnotation() {
+    if (!clearGraphAnnotation({ restoreCamera: true, render: true })) return;
+    showToast('已撤销标注，恢复标注前的视图。');
+  }
+
+  function applyGraphAnnotation(type) {
+    finishEdit();
+    if (!graph.nodes.length) {
+      showToast('没有顶点可进行图分析。', true);
+      return;
+    }
+    if (type === 'edge-types' && !graph.edges.length) {
+      showToast('没有边可标注生成树边类型。', true);
+      return;
+    }
+    const originalCamera = graphAnnotation?.originalCamera || { ...camera };
+    graphAnnotation = null;
+    camera = { ...originalCamera };
+
+    if (type === 'edge-types') {
+      const edgeColors = classifyTreeEdges();
+      graphAnnotation = { type, label: '生成树边类型', edgeColors, components: [], positions: new Map(), originalCamera };
+      updateAnnotationToolbar();
+      renderScene();
+      updateHistoryButtons();
+      showToast(`已标注 ${edgeColors.size} 条生成树边类型。`);
+      return;
+    }
+
+    const metadata = COMPONENT_ANNOTATIONS[type];
+    if (!metadata) return;
+    const nodeComponents = type === 'scc'
+      ? findStronglyConnectedComponents()
+      : type === 'vbcc'
+        ? findVertexBiconnectedComponents()
+        : findEdgeBiconnectedComponents();
+    const components = nodeComponents.map((nodeIds, index) => ({
+      nodeIds,
+      label: `${metadata.label} ${index + 1}`,
+    }));
+    graphAnnotation = {
+      type,
+      label: metadata.label,
+      edgeColors: new Map(),
+      components,
+      positions: layoutComponentPositions(type, nodeComponents),
+      originalCamera,
+    };
+    updateAnnotationToolbar();
+    fitGraph();
+    updateHistoryButtons();
+    showToast(`已标注 ${metadata.description}：${components.length} 个青色框。`);
   }
 
   function arrangeAsTree() {
@@ -2093,6 +2620,7 @@
       .edge-label-text{font-family:Arial,sans-serif;font-size:12px;font-weight:700;text-anchor:middle;dominant-baseline:central}
       .node-label,.node-weight{text-anchor:middle;font-family:Arial,sans-serif;dominant-baseline:central;pointer-events:none}
       .node-label{font-size:14px;font-weight:700}.node-weight{font-size:10.5px;font-weight:600}
+      .annotation-frame-title{fill:#078aa1;font-family:Arial,sans-serif;font-size:12px;font-weight:700}
     `;
     defs?.appendChild(style);
     return new XMLSerializer().serializeToString(cloneSvg);
@@ -2151,6 +2679,7 @@
       const parsed = JSON.parse(await file.text());
       const imported = sanitizeGraph(parsed);
       finishEdit();
+      graphAnnotation = null;
       graph = imported;
       commandEntries = buildCommandEntriesFromGraph(graph);
       writeCommandInput();
@@ -2187,6 +2716,11 @@
     });
     $('#clear-selection').addEventListener('click', clearSelection);
     $('#tree-layout-button').addEventListener('click', arrangeAsTree);
+    $('#mark-edge-types-button').addEventListener('click', () => applyGraphAnnotation('edge-types'));
+    $('#mark-scc-button').addEventListener('click', () => applyGraphAnnotation('scc'));
+    $('#mark-vbcc-button').addEventListener('click', () => applyGraphAnnotation('vbcc'));
+    $('#mark-ebcc-button').addEventListener('click', () => applyGraphAnnotation('ebcc'));
+    $('#undo-annotation-button').addEventListener('click', undoGraphAnnotation);
     $('#toggle-command-sidebar').addEventListener('click', (event) => {
       const collapsed = commandSidebar.classList.toggle('collapsed');
       event.currentTarget.setAttribute('aria-expanded', String(!collapsed));

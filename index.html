@@ -76,14 +76,14 @@
         </div>
         <div class="command-sidebar-body">
           <label class="command-input-label" for="bulk-command-input">每行一条命令</label>
-          <textarea id="bulk-command-input" rows="9" spellcheck="false" aria-label="逐行输入顶点和边" placeholder="u&#10;v 12&#10;u v 1&#10;u v cost 0"></textarea>
+          <textarea id="bulk-command-input" rows="14" spellcheck="false" aria-label="逐行输入顶点和边" placeholder="u&#10;v 12&#10;u v 0&#10;u v cost 1"></textarea>
           <div class="command-syntax-list">
             <div><code>u</code><span>加点，无点权</span></div>
             <div><code>u w</code><span>加点，w 为点权</span></div>
             <div><code>u v d</code><span>加边，无边权</span></div>
             <div><code>u v w d</code><span>加边，w 为边权</span></div>
           </div>
-          <div class="command-direction-note"><strong>d = 1</strong> 有向边；其他值为无向边。找不到的端点会自动加点；重复顶点命令会复用已有点。含空格的字符串请加引号。</div>
+          <div class="command-direction-note"><strong>d = 0</strong> 有向边；其他值为无向边。找不到的端点会自动加点；重复顶点命令会复用已有点。含空格的字符串请加引号。</div>
           <div class="command-enter-note"><kbd>Enter</kbd><span>换行并应用上一行</span><kbd>Backspace</kbd><span>本行仍有效时重应用</span></div>
           <p class="command-sync-note">点击新增的顶点、边会填入第一个空行；没有空行时追加新行。标签、权值、端点和方向等命令字段会同步。删除已应用的命令行会移除对应图元素。</p>
         </div>
@@ -173,6 +173,16 @@
             </button>
           </div>
         </div>
+        <section class="graph-analysis-panel" aria-label="图算法标注">
+          <div class="graph-analysis-heading"><strong>图分析标注</strong><button id="undo-annotation-button" type="button" disabled>撤销标注</button></div>
+          <div class="graph-analysis-actions">
+            <button id="mark-edge-types-button" class="analysis-action-primary" type="button">标注生成树边类型</button>
+            <button id="mark-scc-button" type="button">求 SCC</button>
+            <button id="mark-vbcc-button" type="button">求 VBCC</button>
+            <button id="mark-ebcc-button" type="button">求 EBCC</button>
+          </div>
+          <div id="analysis-legend" class="analysis-legend" aria-live="polite">选择一项分析；新标注会替换当前标注。</div>
+        </section>
         <div class="inspector-tabs" role="tablist" aria-label="侧栏视图">
           <button class="inspector-tab active" type="button" data-tab="properties" role="tab" aria-selected="true">属性</button>
           <button class="inspector-tab" type="button" data-tab="structure" role="tab" aria-selected="false">图结构 <span id="structure-count">13</span></button>
