@@ -233,12 +233,23 @@
     return node.weight ? `${label} ${commandToken(node.weight)}` : label;
   }
 
-  function formatEdgeCommand(edge) {
+  function edgeDirectionFlagFromCommand(text, edge) {
+    try {
+      const tokens = tokenizeCommandLine(text);
+      const flag = tokens.length === 3 ? tokens[2] : tokens.length === 4 ? tokens[3] : null;
+      if (flag == null || (flag === '0') !== edge.directed) return null;
+      return flag;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function formatEdgeCommand(edge, directionFlag = null) {
     const from = graph.nodes.find((node) => node.id === edge.from);
     const to = graph.nodes.find((node) => node.id === edge.to);
     const parts = [commandNodeToken(from || { id: edge.from }), commandNodeToken(to || { id: edge.to })];
     if (edge.weight) parts.push(commandToken(edge.weight));
-    parts.push(edge.directed ? '0' : '1');
+    parts.push(commandToken(directionFlag ?? (edge.directed ? '0' : '1')));
     return parts.join(' ');
   }
 
@@ -287,7 +298,8 @@
             if (entry.kind === 'edge' && entry.text === entry.appliedText) {
               const edge = graph.edges.find((item) => entry.edgeIds.includes(item.id));
               if (edge) {
-                const canonicalText = formatEdgeCommand(edge);
+                const directionFlag = edgeDirectionFlagFromCommand(entry.appliedText, edge);
+                const canonicalText = formatEdgeCommand(edge, directionFlag);
                 entry.text = canonicalText;
                 entry.appliedText = canonicalText;
               }
@@ -422,7 +434,9 @@
         if (!edge) return;
         entry.edgeIds = [edge.id];
         entry.nodeIds = [edge.from, edge.to];
-        const canonicalText = formatEdgeCommand(edge);
+        const sourceText = hasPendingEdit ? entry.appliedText : entry.text;
+        const directionFlag = edgeDirectionFlagFromCommand(sourceText, edge);
+        const canonicalText = formatEdgeCommand(edge, directionFlag);
         if (!hasPendingEdit) entry.text = canonicalText;
         entry.appliedText = canonicalText;
       }
