@@ -7,7 +7,8 @@
   const VIEW_HEIGHT = 800;
   const MAX_HISTORY = 80;
   const COLORS = [
-    { hex: '#334155', name: '石墨' },
+    { hex: '#FFFFFF', name: '白色' },
+    { hex: '#000000', name: '黑色' },
     { hex: '#EF4444', name: '红色' },
     { hex: '#F97316', name: '橙色' },
     { hex: '#F59E0B', name: '琥珀' },
@@ -21,7 +22,6 @@
     { hex: '#3B82F6', name: '蓝色' },
     { hex: '#6366F1', name: '靛蓝' },
     { hex: '#8B5CF6', name: '紫罗兰' },
-    { hex: '#A855F7', name: '紫色' },
     { hex: '#EC4899', name: '粉色' },
   ];
   const COLOR_SET = new Set(COLORS.map((color) => color.hex));
@@ -50,7 +50,8 @@
   let selected = null;
   let mode = 'select';
   let pendingFrom = null;
-  let inspectorTab = 'properties';
+  let inspectorTab = 'create';
+  let createEdgeDefaults = { from: '', to: '', directed: true, style: 'solid' };
   let camera = { x: 0, y: 0, scale: 1 };
   let drag = null;
   let suppressNextClick = false;
@@ -73,11 +74,11 @@
 
   function freshSampleGraph() {
     const nodes = [
-      { id: 'v1', label: 'S', weight: '起点', x: 280, y: 412, color: '#3B82F6', borderColor: '#334155', borderWidth: 3.5 },
-      { id: 'v2', label: 'A', weight: '12', x: 485, y: 245, color: '#14B8A6', borderColor: '#10B981', borderWidth: 2.5 },
-      { id: 'v3', label: 'B', weight: '工厂', x: 500, y: 548, color: '#F59E0B', borderColor: '#F97316', borderWidth: 4 },
-      { id: 'v4', label: 'C', weight: '−3', x: 755, y: 405, color: '#8B5CF6', borderColor: '#6366F1', borderWidth: 2.5 },
-      { id: 'v5', label: 'T', weight: '终点', x: 1000, y: 405, color: '#EF4444', borderColor: '#EC4899', borderWidth: 3 },
+      { id: 'v1', label: 'S', weight: '起点', x: 280, y: 412, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2 },
+      { id: 'v2', label: 'A', weight: '12', x: 485, y: 245, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2 },
+      { id: 'v3', label: 'B', weight: '工厂', x: 500, y: 548, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2 },
+      { id: 'v4', label: 'C', weight: '−3', x: 755, y: 405, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2 },
+      { id: 'v5', label: 'T', weight: '终点', x: 1000, y: 405, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2 },
     ];
     const pointDistance = (from, to) => {
       const a = nodes.find((node) => node.id === from);
@@ -113,8 +114,8 @@
         weight: typeof item?.weight === 'string' ? item.weight : (item?.weight == null ? '' : String(item.weight)),
         x: Number.isFinite(Number(item?.x)) ? Number(item.x) : 120 + (index % 5) * 150,
         y: Number.isFinite(Number(item?.y)) ? Number(item.y) : 120 + Math.floor(index / 5) * 150,
-        color: safeColor(item?.color, COLORS[11].hex),
-        borderColor: safeColor(item?.borderColor, COLORS[0].hex),
+        color: safeColor(item?.color, '#FFFFFF'),
+        borderColor: safeColor(item?.borderColor, '#000000'),
         borderWidth: clamp(Number.isFinite(Number(item?.borderWidth)) ? Number(item.borderWidth) : 2, 0, 8),
       };
     });
@@ -134,7 +135,7 @@
         to,
         directed: item?.directed !== false,
         style: item?.style === 'dashed' ? 'dashed' : 'solid',
-        color: safeColor(item?.color, COLORS[0].hex),
+        color: safeColor(item?.color, '#000000'),
         weight: typeof item?.weight === 'string' ? item.weight : (item?.weight == null ? '' : String(item.weight)),
         length: clamp(Number.isFinite(Number(item?.length)) ? Math.round(Number(item.length)) : 180, 60, 700),
       };
@@ -150,7 +151,32 @@
   function loadGraph() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) return sanitizeGraph(JSON.parse(saved));
+      if (saved) {
+        const loaded = sanitizeGraph(JSON.parse(saved));
+        const legacySampleColors = [
+          ['#3B82F6', '#000000', 3.5],
+          ['#14B8A6', '#10B981', 2.5],
+          ['#F59E0B', '#F97316', 4],
+          ['#8B5CF6', '#6366F1', 2.5],
+          ['#EF4444', '#EC4899', 3],
+        ];
+        const isUntouchedLegacySample = loaded.name === '路径与流量 · 示例图'
+          && loaded.nodes.length === 5
+          && loaded.nodes.every((node, index) => {
+            const sampleNode = freshSampleGraph().nodes[index];
+            const [fill, border, width] = legacySampleColors[index];
+            return node.id === sampleNode.id && node.label === sampleNode.label
+              && node.color === fill && node.borderColor === border && node.borderWidth === width;
+          });
+        if (isUntouchedLegacySample) {
+          loaded.nodes.forEach((node) => {
+            node.color = '#FFFFFF';
+            node.borderColor = '#000000';
+            node.borderWidth = 2;
+          });
+        }
+        return loaded;
+      }
     } catch (error) {
       console.warn('Unable to load the locally saved graph:', error);
     }
@@ -496,15 +522,15 @@
         <div class="stat-card"><span>顶点数量</span><strong>${graph.nodes.length}</strong><small>所有顶点统一自适应尺寸</small></div>
         <div class="stat-card"><span>边数量</span><strong>${graph.edges.length}</strong><small>支持重边与自环</small></div>
       </div>
-      <div class="eyebrow-label">快速开始</div>
+      <div class="eyebrow-label">按标签快速输入</div>
       <div class="quick-actions">
-        <button class="quick-action" type="button" data-quick-mode="node">
+        <button class="quick-action" type="button" data-open-tab="create">
           <span class="quick-action-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/></svg></span>
-          <span><strong>添加顶点</strong><small>在画布点击放置</small></span>
+          <span><strong>输入顶点 u</strong><small>创建白底黑边顶点</small></span>
         </button>
-        <button class="quick-action" type="button" data-quick-mode="edge">
+        <button class="quick-action" type="button" data-open-tab="create">
           <span class="quick-action-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="17.5" r="3"/><circle cx="18" cy="6.5" r="3"/><path d="m8.2 15.5 7.6-7"/></svg></span>
-          <span><strong>创建边</strong><small>依次选择两个顶点</small></span>
+          <span><strong>输入边 u v w</strong><small>支持文本权重与重边</small></span>
         </button>
       </div>
       <div class="eyebrow-label">编辑提示</div>
@@ -519,6 +545,51 @@
         <div class="support-card-title"><i>✦</i> 为复杂图而设计</div>
         <p>16 种颜色、实线 / 虚线、有向 / 无向边可混用。支持字符串权重、可调边长、加粗彩色边框、重边与自环。</p>
       </div>
+    `;
+  }
+
+  function renderCreatePanel() {
+    const nodeOptions = graph.nodes.map((node) => `
+      <option value="${escapeHtml(node.label)}"></option>
+      <option value="${escapeHtml(node.id)}">${escapeHtml(node.label || '未命名顶点')} · ID</option>
+    `).join('');
+    return `
+      <p class="create-intro">按 CS Academy 常见的端点输入方式创建图：添加顶点输入 <code>u</code>，添加边输入 <code>u v w</code>。</p>
+      <section class="create-card">
+        <div class="create-card-heading">
+          <span class="create-card-icon node-create-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/></svg></span>
+          <span><strong>添加顶点</strong><small>输入一个唯一标签 u</small></span>
+        </div>
+        <form id="add-node-form" class="create-form" autocomplete="off">
+          <label class="field-label" for="new-node-label">顶点标签 <code>u</code></label>
+          <div class="create-input-row">
+            <input id="new-node-label" class="text-input create-main-input" name="label" type="text" maxlength="120" placeholder="例如：u、A、入口" required />
+            <button class="create-submit node-submit" type="submit"><span>＋</span>加点</button>
+          </div>
+          <p class="create-help">新顶点默认为白底、黑边、黑字；创建后点击顶点可编辑点权和颜色。</p>
+        </form>
+      </section>
+      <section class="create-card edge-create-card">
+        <div class="create-card-heading">
+          <span class="create-card-icon edge-create-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="17" r="3"/><circle cx="18" cy="7" r="3"/><path d="m8.3 14.8 7.4-5.6m-2 .1 2 .1-.1 2"/></svg></span>
+          <span><strong>添加边</strong><small>端点标签 / ID 与边权 w</small></span>
+        </div>
+        <form id="add-edge-form" class="create-form" autocomplete="off">
+          <datalist id="vertex-options">${nodeOptions}</datalist>
+          <div class="edge-input-grid">
+            <label><span>起点 <code>u</code></span><input class="text-input" name="from" type="text" list="vertex-options" placeholder="u" value="${escapeHtml(createEdgeDefaults.from)}" required /></label>
+            <label><span>终点 <code>v</code></span><input class="text-input" name="to" type="text" list="vertex-options" placeholder="v" value="${escapeHtml(createEdgeDefaults.to)}" required /></label>
+            <label class="weight-input-label"><span>边权 <code>w</code></span><input class="text-input" name="weight" type="text" maxlength="120" placeholder="任意文本" /></label>
+          </div>
+          <div class="create-option-row">
+            <label><span>方向</span><select class="select-input" name="direction"><option value="directed"${createEdgeDefaults.directed ? ' selected' : ''}>有向</option><option value="undirected"${!createEdgeDefaults.directed ? ' selected' : ''}>无向</option></select></label>
+            <label><span>线型</span><select class="select-input" name="style"><option value="solid"${createEdgeDefaults.style === 'solid' ? ' selected' : ''}>实线</option><option value="dashed"${createEdgeDefaults.style === 'dashed' ? ' selected' : ''}>虚线</option></select></label>
+          </div>
+          <button class="create-submit edge-submit" type="submit"><svg viewBox="0 0 24 24"><path d="M4 12h15m-5-5 5 5-5 5"/></svg>加边 <code>u v w</code></button>
+          <p class="create-help">默认黑色有向实线。重复输入可创建重边；<code>u = v</code> 可创建自环。边权可为任意字符串。</p>
+        </form>
+      </section>
+      <div class="create-tip"><span>ⓘ</span> 端点可输入顶点标签，也可使用图结构列表中的顶点 ID。</div>
     `;
   }
 
@@ -651,9 +722,13 @@
     const heading = $('#inspector-title');
     const eyebrow = $('.panel-eyebrow');
     const clear = $('#clear-selection');
-    clear.hidden = !selected;
+    const isCreateTab = inspectorTab === 'create';
+    clear.hidden = !selected || isCreateTab;
 
-    if (selected?.type === 'node') {
+    if (isCreateTab) {
+      heading.textContent = '快速添加';
+      eyebrow.textContent = 'QUICK INPUT';
+    } else if (selected?.type === 'node') {
       const node = graph.nodes.find((item) => item.id === selected.id);
       heading.textContent = node ? '顶点属性' : '图属性';
       eyebrow.textContent = node ? 'VERTEX' : 'WORKSPACE';
@@ -671,6 +746,12 @@
       tab.classList.toggle('active', isActive);
       tab.setAttribute('aria-selected', String(isActive));
     });
+
+    if (inspectorTab === 'create') {
+      inspectorContent.innerHTML = renderCreatePanel();
+      bindCreateForms();
+      return;
+    }
 
     if (inspectorTab === 'structure') {
       inspectorContent.innerHTML = renderStructure();
@@ -720,9 +801,65 @@
       button.addEventListener('click', () => handleInspectorAction(button.dataset.action, button.dataset.value));
     });
 
-    $$('[data-quick-mode]', inspectorContent).forEach((button) => {
-      button.addEventListener('click', () => setMode(button.dataset.quickMode));
+    $$('[data-open-tab]', inspectorContent).forEach((button) => {
+      button.addEventListener('click', () => {
+        finishEdit();
+        inspectorTab = button.dataset.openTab;
+        renderInspector();
+      });
     });
+  }
+
+  function bindCreateForms() {
+    const nodeForm = $('#add-node-form', inspectorContent);
+    const edgeForm = $('#add-edge-form', inspectorContent);
+    nodeForm?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const label = String(new FormData(nodeForm).get('label') ?? '').trim();
+      if (!label) {
+        showToast('请输入顶点标签 u。', true);
+        return;
+      }
+      if (graph.nodes.some((node) => node.label === label)) {
+        showToast(`顶点「${label}」已存在，请使用唯一标签。`, true);
+        return;
+      }
+      addNodeByLabel(label);
+    });
+    edgeForm?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const form = new FormData(edgeForm);
+      const fromToken = String(form.get('from') ?? '').trim();
+      const toToken = String(form.get('to') ?? '').trim();
+      const weight = String(form.get('weight') ?? '');
+      if (!fromToken || !toToken) {
+        showToast('请输入边的起点 u 和终点 v。', true);
+        return;
+      }
+      const fromResult = lookupNode(fromToken);
+      const toResult = lookupNode(toToken);
+      if (!fromResult.node || !toResult.node) {
+        const missing = !fromResult.node ? fromToken : toToken;
+        const result = !fromResult.node ? fromResult : toResult;
+        showToast(result.ambiguous ? `「${missing}」对应多个顶点，请改用唯一的顶点 ID。` : `找不到顶点「${missing}」，请先添加该顶点。`, true);
+        return;
+      }
+      createEdgeDefaults = {
+        from: fromToken,
+        to: toToken,
+        directed: form.get('direction') !== 'undirected',
+        style: form.get('style') === 'dashed' ? 'dashed' : 'solid',
+      };
+      addEdgeByInput(fromResult.node, toResult.node, weight, createEdgeDefaults);
+    });
+  }
+
+  function lookupNode(token) {
+    const byId = graph.nodes.find((node) => node.id === token);
+    if (byId) return { node: byId, ambiguous: false };
+    const byLabel = graph.nodes.filter((node) => node.label === token);
+    if (byLabel.length === 1) return { node: byLabel[0], ambiguous: false };
+    return { node: null, ambiguous: byLabel.length > 1 };
   }
 
   function getSelectedObject() {
@@ -899,10 +1036,14 @@
   }
 
   function addNodeAt(point) {
-    const nodeNumber = graph.nodes.length + 1;
-    const label = nodeNumber <= 26 ? String.fromCharCode(64 + nodeNumber) : `V${nodeNumber}`;
+    const usedLabels = new Set(graph.nodes.map((node) => node.label));
+    let nodeNumber = 1;
+    let label = '';
+    do {
+      label = nodeNumber <= 26 ? String.fromCharCode(64 + nodeNumber) : `V${nodeNumber}`;
+      nodeNumber += 1;
+    } while (usedLabels.has(label));
     const id = createUniqueId('v', graph.nodes);
-    const paletteIndex = graph.nodes.length % COLORS.length;
     commitMutation(() => {
       graph.nodes.push({
         id,
@@ -910,8 +1051,8 @@
         weight: '',
         x: point.x,
         y: point.y,
-        color: COLORS[paletteIndex].hex,
-        borderColor: COLORS[0].hex,
+        color: '#FFFFFF',
+        borderColor: '#000000',
         borderWidth: 2,
       });
       selected = { type: 'node', id };
@@ -919,8 +1060,71 @@
     });
   }
 
+  function nextOpenPosition(label = '') {
+    if (!graph.nodes.length) return { x: 600, y: 400 };
+    const center = {
+      x: graph.nodes.reduce((sum, node) => sum + node.x, 0) / graph.nodes.length,
+      y: graph.nodes.reduce((sum, node) => sum + node.y, 0) / graph.nodes.length,
+    };
+    const proposedRadius = Math.max(nodeRadius(), 30, measureText(label, '700 14px DM Sans, sans-serif') / 2 + 18);
+    const spacing = Math.max(150, proposedRadius * 2 + 42);
+    for (let ring = 1; ring <= 20; ring += 1) {
+      const candidates = ring * 8;
+      const distance = spacing * Math.sqrt(ring);
+      for (let slot = 0; slot < candidates; slot += 1) {
+        const angle = (slot / candidates) * Math.PI * 2 + ring * 0.37;
+        const point = {
+          x: center.x + Math.cos(angle) * distance,
+          y: center.y + Math.sin(angle) * distance,
+        };
+        if (graph.nodes.every((node) => Math.hypot(node.x - point.x, node.y - point.y) >= spacing)) return point;
+      }
+    }
+    return { x: center.x + spacing * 2, y: center.y + spacing * 2 };
+  }
+
+  function addNodeByLabel(label) {
+    const id = createUniqueId('v', graph.nodes);
+    const point = nextOpenPosition(label);
+    commitMutation(() => {
+      graph.nodes.push({
+        id,
+        label,
+        weight: '',
+        x: point.x,
+        y: point.y,
+        color: '#FFFFFF',
+        borderColor: '#000000',
+        borderWidth: 2,
+      });
+      selected = null;
+      pendingFrom = null;
+    });
+    fitGraph();
+    showToast(`已添加顶点「${label}」。点击顶点可修改点权与颜色。`);
+  }
+
   function edgeDistance(from, to) {
     return Math.round(Math.hypot(to.x - from.x, to.y - from.y));
+  }
+
+  function addEdgeByInput(from, to, weight, options) {
+    const edgeId = createUniqueId('e', graph.edges);
+    commitMutation(() => {
+      graph.edges.push({
+        id: edgeId,
+        from: from.id,
+        to: to.id,
+        directed: options.directed,
+        style: options.style,
+        color: '#000000',
+        weight,
+        length: from.id === to.id ? 132 : Math.max(70, edgeDistance(from, to)),
+      });
+      selected = null;
+      pendingFrom = null;
+    });
+    showToast(`已添加边 ${from.label || from.id} ${options.directed ? '→' : '—'} ${to.label || to.id}。`);
   }
 
   function handleEdgeEndpoint(id) {
@@ -947,7 +1151,7 @@
         to: targetId,
         directed: true,
         style: 'solid',
-        color: COLORS[0].hex,
+        color: '#000000',
         weight: '',
         length,
       });
