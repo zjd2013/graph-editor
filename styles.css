@@ -369,6 +369,7 @@ button:disabled { cursor: not-allowed !important; }
 .command-direction-note strong { color: #37846f; }
 .command-enter-note { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; padding-top: 11px; border-top: 1px solid #eff1f5; color: #919bab; font-size: 8px; }
 .command-enter-note kbd { min-width: 31px; padding: 3px 5px; border: 1px solid #e5e9f0; border-radius: 5px; color: #68758b; background: #fafbfd; text-align: center; font-family: inherit; font-size: 8px; }
+.command-sync-note { margin: 9px 0 0; color: #9aa4b2; font-size: 8px; line-height: 1.6; }
 #bulk-command-input { display: block; width: 100%; min-height: 180px; max-height: 48vh; resize: vertical; padding: 10px 11px; border: 1px solid #e3e8ef; border-radius: 9px; outline: none; color: #3c4b61; background: #fbfcfe; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.8; tab-size: 2; }
 #bulk-command-input:hover { border-color: #cfd7e2; }
 #bulk-command-input:focus { border-color: #8192e4; background: #fff; box-shadow: 0 0 0 3px rgba(78,105,220,.1); }

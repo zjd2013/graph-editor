@@ -3,6 +3,7 @@
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const STORAGE_KEY = 'graph-studio.graph.v1';
+  const COMMAND_STORAGE_KEY = 'graph-studio.commands.v1';
   const VIEW_WIDTH = 1200;
   const VIEW_HEIGHT = 800;
   const MAX_HISTORY = 80;
@@ -47,7 +48,11 @@
   const measurementCanvas = document.createElement('canvas');
   const measureContext = measurementCanvas.getContext('2d');
 
+  let didLoadSavedGraph = false;
+  let commandEntryCounter = 1;
   let graph = loadGraph();
+  let commandEntries = loadCommandEntries();
+  commandInput.value = serializeCommandEntries(commandEntries);
   let selected = null;
   let mode = 'select';
   let pendingFrom = null;
@@ -56,6 +61,7 @@
   let drag = null;
   let suppressNextClick = false;
   let activeEditBaseline = null;
+  let activeEditCommandBaseline = null;
   let undoStack = [];
   let redoStack = [];
   let toastTimer = 0;
@@ -152,6 +158,7 @@
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
+        didLoadSavedGraph = true;
         const loaded = sanitizeGraph(JSON.parse(saved));
         const legacySampleColors = [
           ['#3B82F6', '#000000', 3.5],
@@ -183,9 +190,226 @@
     return freshSampleGraph();
   }
 
+  function createCommandEntry(text = '', options = {}) {
+    return {
+      id: `command-${commandEntryCounter++}`,
+      text,
+      appliedText: options.appliedText || '',
+      kind: options.kind || null,
+      nodeIds: Array.isArray(options.nodeIds) ? [...options.nodeIds] : [],
+      createdNodeIds: Array.isArray(options.createdNodeIds) ? [...options.createdNodeIds] : [],
+      edgeIds: Array.isArray(options.edgeIds) ? [...options.edgeIds] : [],
+    };
+  }
+
+  function commandToken(value) {
+    const text = String(value ?? '');
+    if (text && !/[\s"'\\]/.test(text)) return text;
+    return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+
+  function commandNodeToken(node, nodes = graph.nodes) {
+    const label = String(node?.label || '');
+    const conflicts = !label || nodes.some((other) => other.id !== node.id
+      && (other.id === label || other.label === label));
+    return commandToken(conflicts ? node.id : label);
+  }
+
+  function formatNodeCommand(node) {
+    const label = commandToken(node.label || node.id);
+    return node.weight ? `${label} ${commandToken(node.weight)}` : label;
+  }
+
+  function formatEdgeCommand(edge) {
+    const from = graph.nodes.find((node) => node.id === edge.from);
+    const to = graph.nodes.find((node) => node.id === edge.to);
+    const parts = [commandNodeToken(from || { id: edge.from }), commandNodeToken(to || { id: edge.to })];
+    if (edge.weight) parts.push(commandToken(edge.weight));
+    parts.push(edge.directed ? '1' : '0');
+    return parts.join(' ');
+  }
+
+  function createNodeCommandEntry(node, text = formatNodeCommand(node)) {
+    return createCommandEntry(text, {
+      appliedText: text,
+      kind: 'node',
+      nodeIds: [node.id],
+      createdNodeIds: [node.id],
+    });
+  }
+
+  function createEdgeCommandEntry(edge, createdNodeIds = [], text = formatEdgeCommand(edge)) {
+    return createCommandEntry(text, {
+      appliedText: text,
+      kind: 'edge',
+      nodeIds: [edge.from, edge.to],
+      createdNodeIds,
+      edgeIds: [edge.id],
+    });
+  }
+
+  function loadCommandEntries() {
+    try {
+      const saved = localStorage.getItem(COMMAND_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.map((item) => {
+            const text = String(item?.text ?? '');
+            const entry = createCommandEntry(text, {
+              appliedText: typeof item?.appliedText === 'string' ? item.appliedText : text,
+              kind: ['node', 'edge'].includes(item?.kind) ? item.kind : null,
+              nodeIds: Array.isArray(item?.nodeIds) ? item.nodeIds.map(String) : [],
+              createdNodeIds: Array.isArray(item?.createdNodeIds) ? item.createdNodeIds.map(String) : [],
+              edgeIds: Array.isArray(item?.edgeIds) ? item.edgeIds.map(String) : [],
+            });
+            if (typeof item?.id === 'string') {
+              entry.id = item.id;
+              const idMatch = entry.id.match(/(\d+)$/);
+              if (idMatch) commandEntryCounter = Math.max(commandEntryCounter, Number(idMatch[1]) + 1);
+            }
+            const validNode = entry.nodeIds.some((id) => graph.nodes.some((node) => node.id === id));
+            const validEdge = entry.edgeIds.some((id) => graph.edges.some((edge) => edge.id === id));
+            if ((entry.kind === 'node' && !validNode) || (entry.kind === 'edge' && !validEdge)) entry.kind = null;
+            if (!entry.kind) {
+              entry.nodeIds = [];
+              entry.createdNodeIds = [];
+              entry.edgeIds = [];
+              entry.appliedText = '';
+            }
+            return entry;
+          });
+        }
+      }
+    } catch (error) {
+      console.warn('Unable to load saved graph commands:', error);
+    }
+    return didLoadSavedGraph ? buildCommandEntriesFromGraph(graph) : [];
+  }
+
+  function serializeCommandEntries(entries = commandEntries) {
+    return entries.map((entry) => entry.text).join('\n');
+  }
+
+  function persistCommandEntries() {
+    try {
+      localStorage.setItem(COMMAND_STORAGE_KEY, JSON.stringify(commandEntries));
+    } catch (error) {
+      console.warn('Unable to save graph commands:', error);
+    }
+  }
+
+  function buildCommandEntriesFromGraph(sourceGraph) {
+    const previousGraph = graph;
+    graph = sourceGraph;
+    const entries = [
+      ...sourceGraph.nodes.map((node) => createNodeCommandEntry(node)),
+      ...sourceGraph.edges.map((edge) => createEdgeCommandEntry(edge)),
+    ];
+    graph = previousGraph;
+    return entries;
+  }
+
+  function writeCommandInput() {
+    const value = serializeCommandEntries();
+    if (commandInput.value === value) return;
+    const wasFocused = document.activeElement === commandInput;
+    const selectionStart = wasFocused ? commandInput.selectionStart : 0;
+    const selectionEnd = wasFocused ? commandInput.selectionEnd : 0;
+    commandInput.value = value;
+    if (wasFocused) {
+      const start = Math.min(selectionStart, value.length);
+      const end = Math.min(selectionEnd, value.length);
+      commandInput.setSelectionRange(start, end);
+    }
+  }
+
+  function synchronizeCommandEntries(beforeGraph, afterGraph) {
+    const beforeNodes = new Map(beforeGraph.nodes.map((node) => [node.id, node]));
+    const beforeEdges = new Map(beforeGraph.edges.map((edge) => [edge.id, edge]));
+    const afterNodes = new Map(afterGraph.nodes.map((node) => [node.id, node]));
+    const afterEdges = new Map(afterGraph.edges.map((edge) => [edge.id, edge]));
+    const promotedNodeIds = new Set();
+    const removedEntryIds = new Set();
+
+    commandEntries.forEach((entry) => {
+      if (entry.kind === 'node' && entry.nodeIds.some((id) => !afterNodes.has(id))) {
+        removedEntryIds.add(entry.id);
+      }
+      if (entry.kind === 'edge' && entry.edgeIds.some((id) => !afterEdges.has(id))) {
+        removedEntryIds.add(entry.id);
+        entry.createdNodeIds.forEach((id) => promotedNodeIds.add(id));
+      }
+    });
+    commandEntries = commandEntries.filter((entry) => !removedEntryIds.has(entry.id));
+
+    commandEntries.forEach((entry) => {
+      entry.nodeIds = entry.nodeIds.filter((id) => afterNodes.has(id));
+      entry.createdNodeIds = entry.createdNodeIds.filter((id) => afterNodes.has(id));
+      entry.edgeIds = entry.edgeIds.filter((id) => afterEdges.has(id));
+    });
+
+    const hasNodeEntry = (nodeId) => commandEntries.some((entry) => entry.kind === 'node' && entry.nodeIds.includes(nodeId));
+    const hasEdgeEntry = (edgeId) => commandEntries.some((entry) => entry.kind === 'edge' && entry.edgeIds.includes(edgeId));
+    const hasEntryForNode = (nodeId) => commandEntries.some((entry) => entry.nodeIds.includes(nodeId));
+
+    afterGraph.nodes.forEach((node) => {
+      const previous = beforeNodes.get(node.id);
+      const changedInCommand = !previous || previous.label !== node.label || previous.weight !== node.weight;
+      if (!previous || changedInCommand) {
+        if (!hasNodeEntry(node.id) && (!previous || !hasEntryForNode(node.id))) {
+          commandEntries.push(createNodeCommandEntry(node));
+        } else if (previous && !hasNodeEntry(node.id) && (previous.label !== node.label || previous.weight !== node.weight)) {
+          commandEntries.push(createNodeCommandEntry(node));
+        }
+      }
+    });
+
+    afterGraph.edges.forEach((edge) => {
+      const previous = beforeEdges.get(edge.id);
+      const relevantChange = !previous || previous.from !== edge.from || previous.to !== edge.to
+        || previous.directed !== edge.directed || previous.weight !== edge.weight;
+      if ((!previous || relevantChange) && !hasEdgeEntry(edge.id)) {
+        commandEntries.push(createEdgeCommandEntry(edge));
+      }
+    });
+
+    promotedNodeIds.forEach((nodeId) => {
+      if (afterNodes.has(nodeId) && !hasEntryForNode(nodeId)) {
+        commandEntries.push(createNodeCommandEntry(afterNodes.get(nodeId)));
+      }
+    });
+
+    commandEntries.forEach((entry) => {
+      const hasPendingEdit = entry.kind && entry.text !== entry.appliedText;
+      if (entry.kind === 'node') {
+        const node = entry.nodeIds.map((id) => afterNodes.get(id)).find(Boolean);
+        if (!node) return;
+        entry.nodeIds = [node.id];
+        entry.createdNodeIds = [node.id];
+        const canonicalText = formatNodeCommand(node);
+        if (!hasPendingEdit) entry.text = canonicalText;
+        entry.appliedText = canonicalText;
+      } else if (entry.kind === 'edge') {
+        const edge = entry.edgeIds.map((id) => afterEdges.get(id)).find(Boolean);
+        if (!edge) return;
+        entry.edgeIds = [edge.id];
+        entry.nodeIds = [edge.from, edge.to];
+        const canonicalText = formatEdgeCommand(edge);
+        if (!hasPendingEdit) entry.text = canonicalText;
+        entry.appliedText = canonicalText;
+      }
+    });
+
+    commandEntries = commandEntries.filter((entry) => entry.kind || entry.text.trim());
+    writeCommandInput();
+    persistCommandEntries();
+  }
+
   function persistGraph() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(graph));
+      persistCommandEntries();
       saveStatusEl.textContent = '本地自动保存';
       $('.status-dot').style.background = '#49b898';
     } catch (error) {
@@ -194,8 +418,8 @@
     }
   }
 
-  function pushUndo(snapshot) {
-    undoStack.push(snapshot);
+  function pushUndo(snapshot, commandSnapshot = commandEntries) {
+    undoStack.push({ graph: clone(snapshot), commands: clone(commandSnapshot) });
     if (undoStack.length > MAX_HISTORY) undoStack.shift();
     redoStack = [];
     updateHistoryButtons();
@@ -204,8 +428,13 @@
   function finishEdit() {
     if (!activeEditBaseline) return;
     const before = activeEditBaseline;
+    const commandsBefore = activeEditCommandBaseline || clone(commandEntries);
     activeEditBaseline = null;
-    if (JSON.stringify(before) !== JSON.stringify(graph)) pushUndo(before);
+    activeEditCommandBaseline = null;
+    if (JSON.stringify(before) !== JSON.stringify(graph)) {
+      pushUndo(before, commandsBefore);
+      synchronizeCommandEntries(before, graph);
+    }
     persistGraph();
     updateHeader();
     updateHistoryButtons();
@@ -214,26 +443,33 @@
   function beginEdit() {
     if (!activeEditBaseline) {
       activeEditBaseline = clone(graph);
+      activeEditCommandBaseline = clone(commandEntries);
       updateHistoryButtons();
     }
   }
 
-  function commitMutation(action) {
+  function commitMutation(action, options = {}) {
     finishEdit();
     const before = clone(graph);
+    const commandsBefore = clone(commandEntries);
     action();
     if (JSON.stringify(before) === JSON.stringify(graph)) return;
-    pushUndo(before);
+    pushUndo(before, commandsBefore);
+    if (options.syncCommands !== false) synchronizeCommandEntries(before, graph);
     renderAll();
   }
 
   function undo() {
     finishEdit();
     if (!undoStack.length) return;
-    redoStack.push(clone(graph));
-    graph = undoStack.pop();
+    redoStack.push({ graph: clone(graph), commands: clone(commandEntries) });
+    const snapshot = undoStack.pop();
+    graph = snapshot.graph;
+    commandEntries = snapshot.commands;
     selected = selected && selectionExists(selected) ? selected : null;
     pendingFrom = null;
+    writeCommandInput();
+    persistCommandEntries();
     updateHistoryButtons();
     renderAll();
   }
@@ -241,10 +477,14 @@
   function redo() {
     finishEdit();
     if (!redoStack.length) return;
-    undoStack.push(clone(graph));
-    graph = redoStack.pop();
+    undoStack.push({ graph: clone(graph), commands: clone(commandEntries) });
+    const snapshot = redoStack.pop();
+    graph = snapshot.graph;
+    commandEntries = snapshot.commands;
     selected = selected && selectionExists(selected) ? selected : null;
     pendingFrom = null;
+    writeCommandInput();
+    persistCommandEntries();
     updateHistoryButtons();
     renderAll();
   }
@@ -755,9 +995,7 @@
     $$('[data-command-example]', inspectorContent).forEach((button) => {
       button.addEventListener('click', () => {
         finishEdit();
-        const line = button.dataset.commandExample;
-        const current = commandInput.value;
-        commandInput.value = current ? `${current}${current.endsWith('\n') ? '' : '\n'}${line}` : line;
+        appendPendingCommandLine(button.dataset.commandExample);
         commandInput.focus();
         commandInput.setSelectionRange(commandInput.value.length, commandInput.value.length);
       });
@@ -773,6 +1011,7 @@
 
   function updateInspectorField(control) {
     beginEdit();
+    const before = clone(graph);
     const field = control.dataset.field;
     const value = control.value;
     if (field === 'graph.name') {
@@ -811,6 +1050,7 @@
         target[property] = value;
       }
     }
+    synchronizeCommandEntries(before, graph);
     renderScene();
     persistGraph();
     updateHeader();
@@ -1055,23 +1295,205 @@
     return { x: center.x + spacing * 2, y: center.y + spacing * 2 };
   }
 
-  function applyBulkInput(sourceText = commandInput.value) {
-    const lines = String(sourceText).split(/\r?\n/);
-    if (!lines.some((line) => line.trim())) {
-      showToast('请先输入一条图命令。', true);
-      return false;
+  function findCommandLineMatches(oldEntries, newLines) {
+    const oldCount = oldEntries.length;
+    const newCount = newLines.length;
+    if (oldCount * newCount > 2000000) {
+      const matches = [];
+      let prefix = 0;
+      while (prefix < oldCount && prefix < newCount && oldEntries[prefix].text === newLines[prefix]) {
+        matches.push([prefix, prefix]);
+        prefix += 1;
+      }
+      let oldIndex = oldCount - 1;
+      let newIndex = newCount - 1;
+      const suffix = [];
+      while (oldIndex >= prefix && newIndex >= prefix && oldEntries[oldIndex].text === newLines[newIndex]) {
+        suffix.push([oldIndex, newIndex]);
+        oldIndex -= 1;
+        newIndex -= 1;
+      }
+      return matches.concat(suffix.reverse());
     }
 
+    const table = Array.from({ length: oldCount + 1 }, () => new Uint32Array(newCount + 1));
+    for (let oldIndex = oldCount - 1; oldIndex >= 0; oldIndex -= 1) {
+      for (let newIndex = newCount - 1; newIndex >= 0; newIndex -= 1) {
+        table[oldIndex][newIndex] = oldEntries[oldIndex].text === newLines[newIndex]
+          ? table[oldIndex + 1][newIndex + 1] + 1
+          : Math.max(table[oldIndex + 1][newIndex], table[oldIndex][newIndex + 1]);
+      }
+    }
+
+    const matches = [];
+    let oldIndex = 0;
+    let newIndex = 0;
+    while (oldIndex < oldCount && newIndex < newCount) {
+      if (oldEntries[oldIndex].text === newLines[newIndex]) {
+        matches.push([oldIndex, newIndex]);
+        oldIndex += 1;
+        newIndex += 1;
+      } else if (table[oldIndex + 1][newIndex] >= table[oldIndex][newIndex + 1]) {
+        oldIndex += 1;
+      } else {
+        newIndex += 1;
+      }
+    }
+    return matches;
+  }
+
+  function removeCommandEntriesFromGraph(removedEntries, candidateEntries) {
+    const removedEntryIds = new Set(removedEntries.map((entry) => entry.id));
+    const deletedNodeIds = new Set();
+    const deletedEdgeIds = new Set();
+    const possibleOrphanIds = new Set();
+
+    removedEntries.forEach((entry) => {
+      if (entry.kind === 'node') entry.nodeIds.forEach((id) => deletedNodeIds.add(id));
+      if (entry.kind === 'edge') {
+        entry.edgeIds.forEach((id) => deletedEdgeIds.add(id));
+        entry.createdNodeIds.forEach((id) => possibleOrphanIds.add(id));
+      }
+    });
+
+    let changed = true;
+    while (changed) {
+      const previousCounts = `${removedEntryIds.size}:${deletedNodeIds.size}:${deletedEdgeIds.size}`;
+      graph.edges.forEach((edge) => {
+        if (deletedNodeIds.has(edge.from) || deletedNodeIds.has(edge.to)) deletedEdgeIds.add(edge.id);
+      });
+      candidateEntries.forEach((entry) => {
+        if (entry.kind === 'node' && entry.nodeIds.some((id) => deletedNodeIds.has(id))) {
+          removedEntryIds.add(entry.id);
+        }
+        if (entry.kind === 'edge' && entry.edgeIds.some((id) => deletedEdgeIds.has(id))) {
+          removedEntryIds.add(entry.id);
+          entry.createdNodeIds.forEach((id) => possibleOrphanIds.add(id));
+        }
+      });
+
+      possibleOrphanIds.forEach((nodeId) => {
+        if (!graph.nodes.some((node) => node.id === nodeId)) return;
+        const hasRemainingEdge = graph.edges.some((edge) => !deletedEdgeIds.has(edge.id)
+          && (edge.from === nodeId || edge.to === nodeId));
+        const hasRemainingLine = candidateEntries.some((entry) => !removedEntryIds.has(entry.id)
+          && entry.nodeIds.includes(nodeId));
+        if (!hasRemainingEdge && !hasRemainingLine) deletedNodeIds.add(nodeId);
+      });
+      changed = previousCounts !== `${removedEntryIds.size}:${deletedNodeIds.size}:${deletedEdgeIds.size}`;
+    }
+
+    const nextEntries = candidateEntries.filter((entry) => !removedEntryIds.has(entry.id));
     const draft = clone(graph);
+    draft.edges = draft.edges.filter((edge) => !deletedEdgeIds.has(edge.id)
+      && !deletedNodeIds.has(edge.from) && !deletedNodeIds.has(edge.to));
+    draft.nodes = draft.nodes.filter((node) => !deletedNodeIds.has(node.id));
+
+    if (JSON.stringify(draft) !== JSON.stringify(graph)) {
+      commitMutation(() => {
+        graph = draft;
+        if (selected && !selectionExists(selected)) selected = null;
+        if (pendingFrom && deletedNodeIds.has(pendingFrom)) pendingFrom = null;
+      }, { syncCommands: false });
+    }
+    possibleOrphanIds.forEach((nodeId) => {
+      if (deletedNodeIds.has(nodeId) || !draft.nodes.some((node) => node.id === nodeId)) return;
+      const hasNodeLine = nextEntries.some((entry) => entry.kind === 'node' && entry.nodeIds.includes(nodeId));
+      const owner = nextEntries.find((entry) => entry.kind === 'edge' && entry.nodeIds.includes(nodeId));
+      if (!hasNodeLine && owner && !owner.createdNodeIds.includes(nodeId)) owner.createdNodeIds.push(nodeId);
+    });
+    return nextEntries;
+  }
+
+  function reconcileCommandInput() {
+    if (!commandEntries.length && !commandInput.value) return;
+    const newLines = commandInput.value.split(/\r?\n/);
+    const oldEntries = commandEntries;
+    const matches = findCommandLineMatches(oldEntries, newLines);
+    const nextEntries = new Array(newLines.length);
+    const removedEntries = [];
+
+    function reconcileGap(oldStart, oldEnd, newStart, newEnd) {
+      const pairCount = Math.min(oldEnd - oldStart, newEnd - newStart);
+      for (let offset = 0; offset < pairCount; offset += 1) {
+        const original = oldEntries[oldStart + offset];
+        const entry = clone(original);
+        const text = newLines[newStart + offset];
+        if (entry.kind && !text.trim()) {
+          removedEntries.push(original);
+          nextEntries[newStart + offset] = createCommandEntry(text);
+        } else {
+          entry.text = text;
+          nextEntries[newStart + offset] = entry;
+        }
+      }
+      for (let oldIndex = oldStart + pairCount; oldIndex < oldEnd; oldIndex += 1) {
+        removedEntries.push(oldEntries[oldIndex]);
+      }
+      for (let newIndex = newStart + pairCount; newIndex < newEnd; newIndex += 1) {
+        nextEntries[newIndex] = createCommandEntry(newLines[newIndex]);
+      }
+    }
+
+    let oldCursor = 0;
+    let newCursor = 0;
+    [...matches, [oldEntries.length, newLines.length]].forEach(([oldIndex, newIndex]) => {
+      reconcileGap(oldCursor, oldIndex, newCursor, newIndex);
+      if (oldIndex < oldEntries.length) {
+        const entry = clone(oldEntries[oldIndex]);
+        entry.text = newLines[newIndex];
+        nextEntries[newIndex] = entry;
+        oldCursor = oldIndex + 1;
+        newCursor = newIndex + 1;
+      }
+    });
+
+    commandEntries = removeCommandEntriesFromGraph(removedEntries, nextEntries);
+    writeCommandInput();
+    persistCommandEntries();
+  }
+
+  function appendPendingCommandLine(text) {
+    reconcileCommandInput();
+    const last = commandEntries[commandEntries.length - 1];
+    if (last && !last.kind && !last.text.trim()) last.text = text;
+    else commandEntries.push(createCommandEntry(text));
+    writeCommandInput();
+    persistCommandEntries();
+  }
+
+  function applyBulkInput() {
+    reconcileCommandInput();
+    const draft = clone(graph);
+    const nextEntries = clone(commandEntries);
     const errors = [];
+    const orphanCandidates = new Set();
     let addedNodes = 0;
     let addedEdges = 0;
+    let updatedNodes = 0;
+    let updatedCommands = 0;
 
-    lines.forEach((line, index) => {
-      if (!line.trim()) return;
+    nextEntries.forEach((entry, index) => {
+      if (!entry.text.trim()) return;
+      const currentNode = entry.kind === 'node'
+        ? draft.nodes.find((node) => entry.nodeIds.includes(node.id))
+        : null;
+      const currentEdge = entry.kind === 'edge'
+        ? draft.edges.find((edge) => entry.edgeIds.includes(edge.id))
+        : null;
+      if (entry.kind && !currentNode && !currentEdge) {
+        entry.kind = null;
+        entry.nodeIds = [];
+        entry.createdNodeIds = [];
+        entry.edgeIds = [];
+        entry.appliedText = '';
+      }
+      const isApplied = Boolean(currentNode || currentEdge);
+      if (isApplied && entry.text === entry.appliedText) return;
+
       let tokens;
       try {
-        tokens = tokenizeCommandLine(line);
+        tokens = tokenizeCommandLine(entry.text);
       } catch (error) {
         errors.push(`第 ${index + 1} 行：${error.message}`);
         return;
@@ -1088,23 +1510,49 @@
           errors.push(`第 ${index + 1} 行：顶点标签不能为空`);
           return;
         }
-        if (draft.nodes.some((node) => node.label === label || node.id === label)) {
-          errors.push(`第 ${index + 1} 行：顶点「${label}」已存在`);
+        if (entry.kind === 'edge' && currentEdge) {
+          errors.push(`第 ${index + 1} 行：不能把已绑定的边命令改成顶点命令`);
           return;
         }
-        const id = createUniqueId('v', draft.nodes);
-        const point = nextCommandPosition(draft.nodes, label, weight);
-        draft.nodes.push({
-          id,
-          label,
-          weight,
-          x: point.x,
-          y: point.y,
-          color: '#FFFFFF',
-          borderColor: '#000000',
-          borderWidth: 2,
-        });
-        addedNodes += 1;
+        if (currentNode) {
+          currentNode.label = label;
+          currentNode.weight = weight;
+          updatedNodes += 1;
+          entry.kind = 'node';
+          entry.nodeIds = [currentNode.id];
+          entry.createdNodeIds = [currentNode.id];
+          entry.edgeIds = [];
+        } else {
+          if (draft.nodes.some((node) => node.label === label || node.id === label)) {
+            errors.push(`第 ${index + 1} 行：顶点「${label}」已存在`);
+            return;
+          }
+          const id = createUniqueId('v', draft.nodes);
+          const point = nextCommandPosition(draft.nodes, label, weight);
+          const node = {
+            id,
+            label,
+            weight,
+            x: point.x,
+            y: point.y,
+            color: '#FFFFFF',
+            borderColor: '#000000',
+            borderWidth: 2,
+          };
+          draft.nodes.push(node);
+          entry.kind = 'node';
+          entry.nodeIds = [id];
+          entry.createdNodeIds = [id];
+          entry.edgeIds = [];
+          addedNodes += 1;
+        }
+        entry.appliedText = entry.text;
+        updatedCommands += 1;
+        return;
+      }
+
+      if (entry.kind === 'node' && currentNode) {
+        errors.push(`第 ${index + 1} 行：不能把已绑定的顶点命令改成边命令`);
         return;
       }
 
@@ -1115,7 +1563,7 @@
         ? fromResult
         : ensureCommandNode(draft.nodes, tokens[1], toLookup);
       if (fromResult.created) addedNodes += 1;
-      if (toResult.created) addedNodes += 1;
+      if (toResult.created && tokens[0] !== tokens[1]) addedNodes += 1;
       if (!fromResult.node || !toResult.node) {
         const token = !fromResult.node ? tokens[0] : tokens[1];
         const result = !fromResult.node ? fromResult : toResult;
@@ -1124,22 +1572,45 @@
           : `第 ${index + 1} 行：顶点名不能为空`);
         return;
       }
+
       const directionFlag = tokens.length === 3 ? tokens[2] : tokens[3];
       const directed = directionFlag === '1';
       const weight = tokens.length === 4 ? tokens[2] : '';
-      const from = fromResult.node;
-      const to = toResult.node;
-      draft.edges.push({
-        id: createUniqueId('e', draft.edges),
-        from: from.id,
-        to: to.id,
-        directed,
-        style: 'solid',
-        color: '#000000',
-        weight,
-        length: from.id === to.id ? 132 : Math.max(70, edgeDistance(from, to)),
-      });
-      addedEdges += 1;
+      const createdNodeIds = [...new Set([fromResult, toResult]
+        .filter((result) => result.created)
+        .map((result) => result.node.id))];
+
+      if (currentEdge) {
+        entry.createdNodeIds.forEach((id) => orphanCandidates.add(id));
+        currentEdge.from = fromResult.node.id;
+        currentEdge.to = toResult.node.id;
+        currentEdge.directed = directed;
+        currentEdge.weight = weight;
+        currentEdge.length = currentEdge.from === currentEdge.to ? Math.max(132, currentEdge.length) : edgeDistance(fromResult.node, toResult.node);
+        entry.kind = 'edge';
+        entry.edgeIds = [currentEdge.id];
+        entry.nodeIds = [currentEdge.from, currentEdge.to];
+        entry.createdNodeIds = createdNodeIds;
+      } else {
+        const edge = {
+          id: createUniqueId('e', draft.edges),
+          from: fromResult.node.id,
+          to: toResult.node.id,
+          directed,
+          style: 'solid',
+          color: '#000000',
+          weight,
+          length: fromResult.node.id === toResult.node.id ? 132 : Math.max(70, edgeDistance(fromResult.node, toResult.node)),
+        };
+        draft.edges.push(edge);
+        entry.kind = 'edge';
+        entry.edgeIds = [edge.id];
+        entry.nodeIds = [edge.from, edge.to];
+        entry.createdNodeIds = createdNodeIds;
+        addedEdges += 1;
+      }
+      entry.appliedText = entry.text;
+      updatedCommands += 1;
     });
 
     if (errors.length) {
@@ -1148,19 +1619,40 @@
       showToast(`${detail}${remainder}`, true);
       return false;
     }
-    if (!addedNodes && !addedEdges) {
-      showToast('没有可应用的输入。', true);
+    if (!updatedCommands) {
+      showToast('所有命令都已应用；修改或删除命令行即可同步更新图。');
       return false;
     }
 
-    const shouldFit = addedNodes > 0;
-    commitMutation(() => {
-      graph = draft;
-      if (selected && !selectionExists(selected)) selected = null;
-      pendingFrom = null;
+    orphanCandidates.forEach((nodeId) => {
+      const hasNodeLine = nextEntries.some((entry) => entry.kind === 'node' && entry.nodeIds.includes(nodeId));
+      const owner = nextEntries.find((entry) => entry.kind === 'edge' && entry.nodeIds.includes(nodeId));
+      const connected = draft.edges.some((edge) => edge.from === nodeId || edge.to === nodeId);
+      if (hasNodeLine) return;
+      if (owner) {
+        if (!owner.createdNodeIds.includes(nodeId)) owner.createdNodeIds.push(nodeId);
+      } else if (connected) {
+        const node = draft.nodes.find((item) => item.id === nodeId);
+        if (node) nextEntries.push(createNodeCommandEntry(node));
+      } else {
+        draft.nodes = draft.nodes.filter((node) => node.id !== nodeId);
+      }
     });
-    if (shouldFit) fitGraph();
-    showToast(`已添加 ${addedNodes} 个顶点、${addedEdges} 条边。`);
+
+    const graphChanged = JSON.stringify(draft) !== JSON.stringify(graph);
+    if (graphChanged) {
+      commitMutation(() => {
+        graph = draft;
+        if (selected && !selectionExists(selected)) selected = null;
+        pendingFrom = null;
+      }, { syncCommands: false });
+    }
+    commandEntries = nextEntries;
+    synchronizeCommandEntries(graph, graph);
+    if (addedNodes || updatedNodes) fitGraph();
+    showToast(addedNodes || addedEdges
+      ? `已应用 ${updatedCommands} 行命令，新增 ${addedNodes} 个顶点、${addedEdges} 条边。`
+      : `已更新 ${updatedCommands} 行命令。`);
     return true;
   }
 
@@ -1616,6 +2108,8 @@
       const imported = sanitizeGraph(parsed);
       finishEdit();
       graph = imported;
+      commandEntries = buildCommandEntriesFromGraph(graph);
+      writeCommandInput();
       selected = null;
       pendingFrom = null;
       mode = 'select';
@@ -1655,10 +2149,11 @@
       event.currentTarget.setAttribute('aria-label', collapsed ? '展开输入栏' : '收起输入栏');
       event.currentTarget.title = collapsed ? '展开输入栏' : '收起输入栏';
     });
+    commandInput.addEventListener('input', reconcileCommandInput);
     commandInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
-        if (commandInput.value.trim() && applyBulkInput(commandInput.value)) commandInput.value = '';
+        if (commandInput.value.trim()) applyBulkInput();
       }
     });
     $('#import-button').addEventListener('click', () => hiddenFileInput.click());
