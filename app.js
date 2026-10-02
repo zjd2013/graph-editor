@@ -8,6 +8,8 @@
   const VIEW_HEIGHT = 800;
   const MAX_HISTORY = 80;
   const MAX_EDGE_LENGTH = 10000;
+  const EDGE_LABEL_EDGE_GAP = 8;
+  const PARALLEL_EDGE_GAP = 12;
   const COLORS = [
     { hex: '#FFFFFF', name: '白色' },
     { hex: '#000000', name: '黑色' },
@@ -72,6 +74,7 @@
   const measureContext = measurementCanvas.getContext('2d');
   const mathSvgCache = new Map();
   const renderedEdgeLabelSizes = new Map();
+  let edgeParallelLayoutNeedsRender = false;
 
   let commandEntryCounter = 1;
   let graph = loadGraph();
@@ -690,6 +693,17 @@
     return measureRichTextLayout(value, font, fontSize).width;
   }
 
+  function edgeLabelDimensions(edge) {
+    if (!edge?.weight) return null;
+    const layout = measureRichTextLayout(edge.weight, '700 12px DM Sans, Manrope, sans-serif', 12);
+    const renderedSize = renderedEdgeLabelSizes.get(edge.id);
+    const measuredSize = renderedSize?.weight === edge.weight ? renderedSize : null;
+    return {
+      width: Math.max(31, layout.width + 17, measuredSize?.width || 0),
+      height: Math.max(22, layout.height + 24, measuredSize?.height || 0),
+    };
+  }
+
   function ensureEdgeLabelClearance(targetGraph = graph) {
     if (!targetGraph?.nodes?.length || !targetGraph.edges?.length) return false;
     if (targetGraph === graph && graphAnnotation) return false;
@@ -716,56 +730,53 @@
       }
       parallelEdges.get(key).edges.push(edge);
     });
-    if (!parallelEdges.size) return false;
 
-    const radius = nodeRadiusFor(targetGraph.nodes);
     const pairs = [...parallelEdges.values()].sort((a, b) => (
       a.firstIndex - b.firstIndex || a.secondIndex - b.secondIndex
     ));
     const movedNodes = new Set();
     let changed = false;
+    if (pairs.length) {
+      const radius = nodeRadiusFor(targetGraph.nodes);
+      for (let pass = 0; pass < Math.min(12, pairs.length + 1); pass += 1) {
+        let movedThisPass = false;
+        pairs.forEach((pair) => {
+          const anchor = nodeById.get(pair.firstId);
+          const mover = nodeById.get(pair.secondId);
+          if (!anchor || !mover) return;
 
-    for (let pass = 0; pass < Math.min(12, pairs.length + 1); pass += 1) {
-      let movedThisPass = false;
-      pairs.forEach((pair) => {
-        const anchor = nodeById.get(pair.firstId);
-        const mover = nodeById.get(pair.secondId);
-        if (!anchor || !mover) return;
+          let dx = mover.x - anchor.x;
+          let dy = mover.y - anchor.y;
+          let distance = Math.hypot(dx, dy);
+          if (distance < 1) {
+            const seed = `${pair.firstId}:${pair.secondId}`;
+            const hash = Array.from(seed).reduce((sum, character) => sum + character.charCodeAt(0), 0);
+            const angle = (hash % 360) * Math.PI / 180;
+            dx = Math.cos(angle);
+            dy = Math.sin(angle);
+            distance = 1;
+          }
+          const unitX = dx / distance;
+          const unitY = dy / distance;
+          let requiredDistance = 0;
+          pair.edges.forEach((edge) => {
+            const size = edgeLabelDimensions(edge);
+            if (!size) return;
+            const projectedLabelSpan = Math.abs(unitX) * size.width + Math.abs(unitY) * size.height;
+            const endpointExtent = (radius + anchor.borderWidth / 2 + 2)
+              + (radius + mover.borderWidth / 2 + 2);
+            requiredDistance = Math.max(requiredDistance, endpointExtent + projectedLabelSpan + 24);
+          });
 
-        let dx = mover.x - anchor.x;
-        let dy = mover.y - anchor.y;
-        let distance = Math.hypot(dx, dy);
-        if (distance < 1) {
-          const seed = `${pair.firstId}:${pair.secondId}`;
-          const hash = Array.from(seed).reduce((sum, character) => sum + character.charCodeAt(0), 0);
-          const angle = (hash % 360) * Math.PI / 180;
-          dx = Math.cos(angle);
-          dy = Math.sin(angle);
-          distance = 1;
-        }
-        const unitX = dx / distance;
-        const unitY = dy / distance;
-        let requiredDistance = 0;
-        pair.edges.forEach((edge) => {
-          const labelLayout = measureRichTextLayout(edge.weight, '700 12px DM Sans, Manrope, sans-serif', 12);
-          const renderedSize = renderedEdgeLabelSizes.get(edge.id);
-          const measuredSize = renderedSize?.weight === edge.weight ? renderedSize : null;
-          const labelWidth = Math.max(31, labelLayout.width + 17, measuredSize?.width || 0);
-          const labelHeight = Math.max(22, labelLayout.height + 24, measuredSize?.height || 0);
-          const projectedLabelSpan = Math.abs(unitX) * labelWidth + Math.abs(unitY) * labelHeight;
-          const endpointExtent = (radius + anchor.borderWidth / 2 + 2)
-            + (radius + mover.borderWidth / 2 + 2);
-          requiredDistance = Math.max(requiredDistance, endpointExtent + projectedLabelSpan + 24);
+          if (!requiredDistance || distance + 0.5 >= requiredDistance) return;
+          mover.x = anchor.x + unitX * requiredDistance;
+          mover.y = anchor.y + unitY * requiredDistance;
+          movedNodes.add(mover.id);
+          movedThisPass = true;
+          changed = true;
         });
-
-        if (distance + 0.5 >= requiredDistance) return;
-        mover.x = anchor.x + unitX * requiredDistance;
-        mover.y = anchor.y + unitY * requiredDistance;
-        movedNodes.add(mover.id);
-        movedThisPass = true;
-        changed = true;
-      });
-      if (!movedThisPass) break;
+        if (!movedThisPass) break;
+      }
     }
 
     if (movedNodes.size) {
@@ -778,6 +789,8 @@
       });
       if (targetGraph === graph) edgeExpansionNeedsFit = true;
     }
+
+    if (targetGraph === graph && ensureEdgeLabelsAvoidOtherEdges(targetGraph, nodeById)) changed = true;
     return changed;
   }
 
@@ -915,7 +928,47 @@
     return graphAnnotation?.edgeColors?.get(edge.id) || edge.color;
   }
 
-  function edgeGeometry(edge, groupIndex, groupSize, radius) {
+  function parallelEdgeControlOffsets(edgeGroup, edge, fromPosition, toPosition) {
+    if (edgeGroup.length < 2) return [0];
+    const dx = toPosition.x - fromPosition.x;
+    const dy = toPosition.y - fromPosition.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    const canonicalSign = String(edge.from).localeCompare(String(edge.to)) <= 0 ? 1 : -1;
+    const normal = { x: (-dy / distance) * canonicalSign, y: (dx / distance) * canonicalSign };
+    const halfSpans = edgeGroup.map((edge) => {
+      const size = edgeLabelDimensions(edge);
+      return size ? Math.abs(normal.x) * size.width / 2 + Math.abs(normal.y) * size.height / 2 : 0;
+    });
+    const lanes = [0];
+    for (let index = 1; index < edgeGroup.length; index += 1) {
+      const previousHalfSpan = halfSpans[index - 1];
+      const currentHalfSpan = halfSpans[index];
+      const labelGap = previousHalfSpan && currentHalfSpan
+        ? previousHalfSpan + currentHalfSpan + PARALLEL_EDGE_GAP * 2
+        : Math.max(previousHalfSpan, currentHalfSpan) + PARALLEL_EDGE_GAP;
+      lanes.push(lanes[index - 1] + Math.max(19, labelGap));
+    }
+    const center = (lanes[0] + lanes[lanes.length - 1]) / 2;
+    return lanes.map((lane) => (lane - center) * 2);
+  }
+
+  function loopEdgeOffsetStep(edgeGroup) {
+    if (edgeGroup.length < 2) return 19;
+    const halfHeights = edgeGroup.map((edge) => edgeLabelDimensions(edge)?.height / 2 || 0);
+    if (!halfHeights.some(Boolean)) return 19;
+    let centerGap = 19;
+    for (let index = 1; index < halfHeights.length; index += 1) {
+      const previousHalfHeight = halfHeights[index - 1];
+      const currentHalfHeight = halfHeights[index];
+      const labelGap = previousHalfHeight && currentHalfHeight
+        ? previousHalfHeight + currentHalfHeight + PARALLEL_EDGE_GAP * 2
+        : Math.max(previousHalfHeight, currentHalfHeight) + PARALLEL_EDGE_GAP;
+      centerGap = Math.max(centerGap, labelGap);
+    }
+    return centerGap / 0.75;
+  }
+
+  function edgeGeometry(edge, groupIndex, groupSize, radius, edgeGroup = [edge]) {
     const from = graph.nodes.find((node) => node.id === edge.from);
     const to = graph.nodes.find((node) => node.id === edge.to);
     if (!from || !to) return null;
@@ -924,7 +977,7 @@
     const toPosition = displayNodePosition(to);
 
     if (from.id === to.id) {
-      const expanded = Math.max(58, edge.length * 0.57) + groupIndex * 19;
+      const expanded = Math.max(58, edge.length * 0.57) + groupIndex * loopEdgeOffsetStep(edgeGroup);
       const start = { x: fromPosition.x - radius * 0.55, y: fromPosition.y - radius * 0.82 };
       const end = { x: fromPosition.x + radius * 0.55, y: fromPosition.y - radius * 0.82 };
       const first = { x: fromPosition.x - radius - expanded * 0.42, y: fromPosition.y - radius - expanded };
@@ -933,6 +986,7 @@
       return {
         path: `M ${start.x} ${start.y} C ${first.x} ${first.y}, ${second.x} ${second.y}, ${end.x} ${end.y}`,
         label,
+        curve: { type: 'cubic', start, first, second, end },
         arrowTip: end,
         arrowDirection: unitVector(end.x - second.x, end.y - second.y),
       };
@@ -943,7 +997,8 @@
     const centerDistance = Math.hypot(dx, dy) || 1;
     const canonicalSign = String(from.id).localeCompare(String(to.id)) <= 0 ? 1 : -1;
     const perpendicular = { x: (-dy / centerDistance) * canonicalSign, y: (dx / centerDistance) * canonicalSign };
-    const offset = (groupIndex - (groupSize - 1) / 2) * 38;
+    const controlOffsets = parallelEdgeControlOffsets(edgeGroup, edge, fromPosition, toPosition);
+    const offset = controlOffsets[groupIndex] ?? (groupIndex - (groupSize - 1) / 2) * 38;
     const control = {
       x: (fromPosition.x + toPosition.x) / 2 + perpendicular.x * offset,
       y: (fromPosition.y + toPosition.y) / 2 + perpendicular.y * offset,
@@ -957,9 +1012,189 @@
     return {
       path: `M ${start.x} ${start.y} Q ${control.x} ${control.y}, ${end.x} ${end.y}`,
       label: pointForQuadratic(start, control, end, 0.5),
+      curve: { type: 'quadratic', start, control, end },
       arrowTip: end,
       arrowDirection: unitVector(end.x - control.x, end.y - control.y),
     };
+  }
+
+  function groupEdgesByEndpoints(nodes, edges) {
+    const nodeOrder = new Map(nodes.map((node, index) => [node.id, index]));
+    const groups = new Map();
+    edges.forEach((edge) => {
+      const fromIndex = nodeOrder.get(edge.from) ?? 0;
+      const toIndex = nodeOrder.get(edge.to) ?? 0;
+      const key = edge.from === edge.to
+        ? `loop:${edge.from}`
+        : `pair:${Math.min(fromIndex, toIndex)}:${Math.max(fromIndex, toIndex)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(edge);
+    });
+    return groups;
+  }
+
+  function edgeGeometryMapForCurrentGraph() {
+    const groups = groupEdgesByEndpoints(graph.nodes, graph.edges);
+    const radius = nodeRadius();
+    const geometries = new Map();
+    groups.forEach((edges) => edges.forEach((edge, index) => {
+      const geometry = edgeGeometry(edge, index, edges.length, radius, edges);
+      if (geometry) geometries.set(edge.id, geometry);
+    }));
+    return geometries;
+  }
+
+  function sampleEdgeCurve(curve, steps = 48) {
+    if (!curve) return [];
+    const points = [];
+    for (let index = 0; index <= steps; index += 1) {
+      const t = index / steps;
+      points.push(curve.type === 'cubic'
+        ? pointForCubic(curve.start, curve.first, curve.second, curve.end, t)
+        : pointForQuadratic(curve.start, curve.control, curve.end, t));
+    }
+    return points;
+  }
+
+  function segmentIntersectsRect(start, end, rect) {
+    let minT = 0;
+    let maxT = 1;
+    const axes = [
+      { origin: start.x, delta: end.x - start.x, min: rect.left, max: rect.right },
+      { origin: start.y, delta: end.y - start.y, min: rect.top, max: rect.bottom },
+    ];
+    for (const axis of axes) {
+      if (Math.abs(axis.delta) < 1e-9) {
+        if (axis.origin < axis.min || axis.origin > axis.max) return false;
+        continue;
+      }
+      let firstT = (axis.min - axis.origin) / axis.delta;
+      let secondT = (axis.max - axis.origin) / axis.delta;
+      if (firstT > secondT) [firstT, secondT] = [secondT, firstT];
+      minT = Math.max(minT, firstT);
+      maxT = Math.min(maxT, secondT);
+      if (minT > maxT) return false;
+    }
+    return true;
+  }
+
+  function edgeCurveIntersectsLabel(center, size, curve, margin = EDGE_LABEL_EDGE_GAP) {
+    const rect = {
+      left: center.x - size.width / 2 - margin,
+      right: center.x + size.width / 2 + margin,
+      top: center.y - size.height / 2 - margin,
+      bottom: center.y + size.height / 2 + margin,
+    };
+    const points = sampleEdgeCurve(curve);
+    let intersects = false;
+    let closest = null;
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      if (segmentIntersectsRect(start, end, rect)) intersects = true;
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const lengthSquared = dx * dx + dy * dy;
+      const projection = lengthSquared
+        ? clamp(((center.x - start.x) * dx + (center.y - start.y) * dy) / lengthSquared, 0, 1)
+        : 0;
+      const point = { x: start.x + dx * projection, y: start.y + dy * projection };
+      const distance = Math.hypot(center.x - point.x, center.y - point.y);
+      if (!closest || distance < closest.distance) {
+        const tangent = Math.hypot(dx, dy) > 1e-9 ? unitVector(dx, dy) : { x: 1, y: 0 };
+        closest = { point, tangent, distance };
+      }
+    }
+    return { intersects, closest };
+  }
+
+  function hasSameEndpoints(first, second) {
+    return (first.from === second.from && first.to === second.to)
+      || (first.from === second.to && first.to === second.from);
+  }
+
+  function moveLabeledEdgeAwayFromObstacle(labelEdge, labelGeometry, labelSize, obstacleId, collision, nodeById, movedNodes) {
+    const from = nodeById.get(labelEdge.from);
+    const to = nodeById.get(labelEdge.to);
+    const nearest = collision.closest;
+    if (!from || !to || !nearest) return false;
+
+    const normal = { x: -nearest.tangent.y, y: nearest.tangent.x };
+    const signedDistance = (labelGeometry.label.x - nearest.point.x) * normal.x
+      + (labelGeometry.label.y - nearest.point.y) * normal.y;
+    let side = Math.sign(signedDistance);
+    if (!side) {
+      const seed = `${labelEdge.id}:${obstacleId}`;
+      const hash = Array.from(seed).reduce((sum, character) => sum + character.charCodeAt(0), 0);
+      side = hash % 2 ? 1 : -1;
+    }
+    const push = { x: normal.x * side, y: normal.y * side };
+    const projectedHalfSpan = Math.abs(normal.x) * labelSize.width / 2
+      + Math.abs(normal.y) * labelSize.height / 2;
+    const shortfall = Math.max(0, projectedHalfSpan + EDGE_LABEL_EDGE_GAP - Math.abs(signedDistance));
+    const shift = Math.max(30, shortfall * 2 + 16);
+
+    let mover = from;
+    if (from.id !== to.id) {
+      const fromProjection = (from.x - labelGeometry.label.x) * push.x
+        + (from.y - labelGeometry.label.y) * push.y;
+      const toProjection = (to.x - labelGeometry.label.x) * push.x
+        + (to.y - labelGeometry.label.y) * push.y;
+      mover = fromProjection > toProjection ? from : to;
+    }
+    mover.x += push.x * shift;
+    mover.y += push.y * shift;
+    movedNodes.add(mover.id);
+    return true;
+  }
+
+  function ensureEdgeLabelsAvoidOtherEdges(targetGraph, nodeById) {
+    if (targetGraph !== graph || graphAnnotation || targetGraph.edges.length < 2) return false;
+    const movedNodes = new Set();
+    let changed = false;
+    const maxPasses = Math.min(24, Math.max(8, targetGraph.edges.length * 2));
+
+    for (let pass = 0; pass < maxPasses; pass += 1) {
+      const geometries = edgeGeometryMapForCurrentGraph();
+      let movedThisPass = false;
+      outer: for (const labelEdge of targetGraph.edges) {
+        const labelSize = edgeLabelDimensions(labelEdge);
+        const labelGeometry = geometries.get(labelEdge.id);
+        if (!labelSize || !labelGeometry) continue;
+
+        for (const obstacle of targetGraph.edges) {
+          if (obstacle.id === labelEdge.id || hasSameEndpoints(labelEdge, obstacle)) continue;
+          const obstacleGeometry = geometries.get(obstacle.id);
+          if (!obstacleGeometry?.curve) continue;
+          const collision = edgeCurveIntersectsLabel(labelGeometry.label, labelSize, obstacleGeometry.curve);
+          if (!collision.intersects) continue;
+          if (!moveLabeledEdgeAwayFromObstacle(
+            labelEdge,
+            labelGeometry,
+            labelSize,
+            obstacle.id,
+            collision,
+            nodeById,
+            movedNodes,
+          )) continue;
+          movedThisPass = true;
+          changed = true;
+          break outer;
+        }
+      }
+      if (!movedThisPass) break;
+    }
+
+    if (movedNodes.size) {
+      targetGraph.edges.forEach((edge) => {
+        if (edge.from === edge.to || (!movedNodes.has(edge.from) && !movedNodes.has(edge.to))) return;
+        const from = nodeById.get(edge.from);
+        const to = nodeById.get(edge.to);
+        if (from && to) edge.length = Math.round(Math.hypot(to.x - from.x, to.y - from.y));
+      });
+      edgeExpansionNeedsFit = true;
+    }
+    return changed;
   }
 
   function arrowPolygon(tip, direction, size = 12) {
@@ -971,8 +1206,8 @@
     return `${tip.x},${tip.y} ${left.x},${left.y} ${right.x},${right.y}`;
   }
 
-  function renderEdge(edge, groupIndex, groupSize, radius) {
-    const geometry = edgeGeometry(edge, groupIndex, groupSize, radius);
+  function renderEdge(edge, groupIndex, groupSize, radius, edgeGroup = [edge]) {
+    const geometry = edgeGeometry(edge, groupIndex, groupSize, radius, edgeGroup);
     if (!geometry) return null;
     const group = svgElement('g', { class: 'graph-edge', 'data-id': edge.id });
     const isSelected = selected?.type === 'edge' && selected.id === edge.id;
@@ -1006,9 +1241,9 @@
         class: 'edge-label',
         transform: `translate(${geometry.label.x} ${geometry.label.y})`,
       });
-      const labelLayout = measureRichTextLayout(edge.weight, '700 12px DM Sans, Manrope, sans-serif', 12);
-      const width = Math.max(31, labelLayout.width + 17);
-      const height = Math.max(22, labelLayout.height + 24);
+      const labelSize = edgeLabelDimensions(edge);
+      const width = labelSize.width;
+      const height = labelSize.height;
       labelGroup.appendChild(svgElement('rect', {
         class: 'edge-label-bg',
         x: -width / 2,
@@ -1072,6 +1307,8 @@
       const labelText = $('.edge-label-text', labelGroup);
       const background = $('.edge-label-bg', labelGroup);
       if (!background) return;
+      const initialWidth = Number(background.getAttribute('width')) || 31;
+      const initialHeight = Number(background.getAttribute('height')) || 22;
 
       if (labelText?.querySelector('svg') && typeof labelText.getBBox === 'function') {
         try {
@@ -1117,6 +1354,7 @@
       const edge = graph.edges.find((item) => item.id === edgeId);
       if (edgeId && edge && Number.isFinite(width) && Number.isFinite(height)) {
         renderedEdgeLabelSizes.set(edgeId, { width, height, weight: edge.weight });
+        if (width > initialWidth + 0.5 || height > initialHeight + 0.5) edgeParallelLayoutNeedsRender = true;
       }
     });
   }
@@ -1159,22 +1397,12 @@
 
   function renderScene(edgeFitPass = 0) {
     const radius = nodeRadius();
-    const nodeOrder = new Map(graph.nodes.map((node, index) => [node.id, index]));
-    const groups = new Map();
-    graph.edges.forEach((edge) => {
-      const fromIndex = nodeOrder.get(edge.from) ?? 0;
-      const toIndex = nodeOrder.get(edge.to) ?? 0;
-      const key = edge.from === edge.to
-        ? `loop:${edge.from}`
-        : `pair:${Math.min(fromIndex, toIndex)}:${Math.max(fromIndex, toIndex)}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(edge);
-    });
+    const groups = groupEdgesByEndpoints(graph.nodes, graph.edges);
 
     const fragments = document.createDocumentFragment();
     fragments.appendChild(renderAnnotationFrames(radius));
     groups.forEach((edges) => edges.forEach((edge, index) => {
-      const element = renderEdge(edge, index, edges.length, radius);
+      const element = renderEdge(edge, index, edges.length, radius, edges);
       if (element) fragments.appendChild(element);
     }));
     graph.nodes.forEach((node) => fragments.appendChild(renderNode(node, radius)));
@@ -1182,6 +1410,11 @@
     world.replaceChildren(fragments);
     world.setAttribute('transform', `translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
     fitMathEdgeLabelBackgrounds();
+    if (edgeParallelLayoutNeedsRender && edgeFitPass < 4) {
+      edgeParallelLayoutNeedsRender = false;
+      renderScene(edgeFitPass + 1);
+      return;
+    }
     if (!graphAnnotation && edgeFitPass < 4 && ensureEdgeLabelClearance(graph)) {
       renderScene(edgeFitPass + 1);
       return;
