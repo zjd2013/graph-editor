@@ -1567,7 +1567,7 @@
   function commandEntryIsComplete(entry) {
     try {
       const count = tokenizeCommandLine(entry.text).length;
-      if (entry.kind === 'node') return count >= 1 && count <= 2;
+      if (entry.kind === 'node') return count >= 1 && count <= 4;
       if (entry.kind === 'edge') return count >= 3 && count <= 4;
       return count >= 1 && count <= 4;
     } catch (_) {
@@ -1678,8 +1678,7 @@
       }
 
       if (entry.kind === 'node' && currentNode) {
-        errors.push(`第 ${index + 1} 行：不能把已绑定的顶点命令改成边命令`);
-        return;
+        entry.createdNodeIds.forEach((id) => orphanCandidates.add(id));
       }
 
       const fromLookup = lookupNodeIn(draft.nodes, tokens[0]);
@@ -2357,6 +2356,7 @@
       button.setAttribute('aria-pressed', String(active));
       button.disabled = type === 'edge-types' ? graph.edges.length === 0 : graph.nodes.length === 0;
     });
+    $('#analysis-toolbar-toggle')?.classList.toggle('is-on', Boolean(graphAnnotation));
     const undoButton = $('#undo-annotation-button');
     if (undoButton) undoButton.disabled = !graphAnnotation;
     const legend = $('#analysis-legend');
@@ -2721,6 +2721,28 @@
     $('#mark-vbcc-button').addEventListener('click', () => applyGraphAnnotation('vbcc'));
     $('#mark-ebcc-button').addEventListener('click', () => applyGraphAnnotation('ebcc'));
     $('#undo-annotation-button').addEventListener('click', undoGraphAnnotation);
+    const analysisMenu = $('#analysis-toolbar-menu');
+    const analysisMenuToggle = $('#analysis-toolbar-toggle');
+    const syncAnalysisMenuState = () => {
+      analysisMenuToggle.setAttribute('aria-expanded', String(analysisMenu.open));
+      analysisMenuToggle.title = analysisMenu.open ? '关闭图分析工具' : '打开图分析工具';
+    };
+    const closeAnalysisMenu = (restoreFocus = false) => {
+      if (analysisMenu.open) analysisMenu.open = false;
+      if (restoreFocus) analysisMenuToggle.focus();
+    };
+    analysisMenu.addEventListener('toggle', syncAnalysisMenuState);
+    analysisMenu.addEventListener('click', (event) => {
+      const action = event.target.closest?.('.analysis-menu-action');
+      if (action) closeAnalysisMenu(true);
+    });
+    analysisMenu.addEventListener('focusout', (event) => {
+      if (event.relatedTarget && !analysisMenu.contains(event.relatedTarget)) closeAnalysisMenu();
+    });
+    document.addEventListener('pointerdown', (event) => {
+      if (analysisMenu.open && !analysisMenu.contains(event.target)) closeAnalysisMenu();
+    });
+    syncAnalysisMenuState();
     $('#toggle-command-sidebar').addEventListener('click', (event) => {
       const collapsed = commandSidebar.classList.toggle('collapsed');
       event.currentTarget.setAttribute('aria-expanded', String(!collapsed));
@@ -2787,12 +2809,18 @@
     }, { passive: false });
 
     document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && analysisMenu.open) {
+        event.preventDefault();
+        closeAnalysisMenu(true);
+        return;
+      }
       const target = event.target;
-      const editing = target instanceof HTMLElement && (
-        target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+      const inputControl = target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+      const interactiveControl = target instanceof HTMLElement && (
+        target.isContentEditable || inputControl || ['BUTTON', 'SUMMARY'].includes(target.tagName)
       );
-      if (editing) {
-        if (event.key === 'Escape') target.blur();
+      if (interactiveControl) {
+        if (inputControl && event.key === 'Escape') target.blur();
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {

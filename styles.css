@@ -144,20 +144,11 @@ button:disabled { cursor: not-allowed !important; }
   flex: 0 0 76px;
   flex-direction: column;
   align-items: center;
-  overflow-y: auto;
-  overflow-x: hidden;
   padding: 21px 9px 14px;
   border-left: 1px solid var(--line);
   background: #fff;
 }
 .tool-group { display: flex; width: 100%; flex-direction: column; align-items: center; gap: 8px; }
-.analysis-tool-group { display: flex; width: 100%; flex: 0 0 auto; flex-direction: column; align-items: center; gap: 4px; margin-top: 11px; padding-top: 10px; border-top: 1px solid #eff1f5; }
-.analysis-tool-button { display: flex; width: 56px; min-height: 46px; flex: 0 0 auto; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 3px 2px; border: 1px solid transparent; border-radius: 9px; color: #758195; background: transparent; cursor: pointer; }
-.analysis-tool-button:hover:not(:disabled) { color: #117e92; border-color: #d9eef1; background: #f2fafb; }
-.analysis-tool-button.is-active { color: #087b8f; border-color: #b4e3e8; background: #eaf9fb; }
-.analysis-tool-button:disabled { color: #b9c1cc; cursor: not-allowed; }
-.analysis-tool-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.analysis-tool-button span { font-size: 8px; font-weight: 700; line-height: 1; }
 .rail-label { margin: 0 0 2px; color: #a2aab7; font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
 .tool-button {
   position: relative;
@@ -205,6 +196,24 @@ button:disabled { cursor: not-allowed !important; }
 .canvas-tool-button.is-on { color: #4f68d5; }
 .canvas-tool-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
 .canvas-tool-button span { font-size: 10px; font-weight: 600; }
+.analysis-toolbar-menu { position: relative; display: inline-flex; align-items: center; }
+.analysis-toolbar-menu > summary { list-style: none; }
+.analysis-toolbar-menu > summary:focus-visible { outline: 3px solid rgba(78,105,220,.23); outline-offset: 2px; }
+.analysis-toolbar-menu > summary::-webkit-details-marker { display: none; }
+.analysis-toolbar-menu > summary .analysis-chevron { width: 12px; height: 12px; margin-left: -3px; transition: transform .15s ease; }
+.analysis-toolbar-menu[open] > summary, .analysis-toolbar-menu > summary.is-on { color: #167f91; background: #eaf9fb; }
+.analysis-toolbar-menu[open] > summary .analysis-chevron { transform: rotate(180deg); }
+.analysis-toolbar-dropdown { position: absolute; top: calc(100% + 9px); right: 0; z-index: 12; width: min(278px, calc(100vw - 28px)); padding: 6px; border: 1px solid #e2e8ef; border-radius: 11px; background: #fff; box-shadow: 0 14px 36px rgba(31,45,68,.18); }
+.analysis-menu-action { display: flex; width: 100%; min-height: 43px; align-items: center; gap: 10px; padding: 7px 9px; border: 1px solid transparent; border-radius: 8px; color: #627085; background: transparent; text-align: left; cursor: pointer; }
+.analysis-menu-action:hover:not(:disabled) { border-color: #e4f2f4; color: #197f90; background: #f4fbfc; }
+.analysis-menu-action.is-active { border-color: #c6e8ec; color: #087b8f; background: #eefafb; }
+.analysis-menu-action:disabled { color: #b8c0cc; cursor: not-allowed; }
+.analysis-menu-action > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.analysis-menu-action strong { color: inherit; font-size: 11px; font-weight: 700; }
+.analysis-menu-action small { color: #98a2b0; font-size: 9px; line-height: 1.35; }
+.analysis-menu-swatch { display: grid; width: 10px; height: 10px; flex: 0 0 10px; place-items: center; border-radius: 50%; }
+.analysis-menu-swatch.analysis-undo-symbol { color: #728096; font-size: 15px; font-style: normal; }
+.analysis-separator { margin: 0 3px; }
 .canvas-tool-separator { width: 1px; height: 17px; margin: 0 2px; background: #e8ebf1; }
 .canvas-surface { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; border: 1px solid #e4e9f0; border-radius: 15px; background: #fbfcfe; box-shadow: 0 5px 22px rgba(45,61,86,.035); }
 #graph-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -438,11 +447,6 @@ button:disabled { cursor: not-allowed !important; }
   .command-sidebar.collapsed { width: 56px; flex-basis: 56px; }
   .tool-rail { z-index: 4; width: 58px; flex-basis: 58px; padding: 13px 5px 10px; }
   .tool-button { width: 47px; min-height: 54px; }
-  .analysis-tool-group { gap: 3px; margin-top: 9px; padding-top: 8px; }
-  .analysis-tool-group .rail-label { font-size: 8px; letter-spacing: .5px; }
-  .analysis-tool-button { width: 47px; min-height: 43px; }
-  .analysis-tool-button svg { width: 15px; height: 15px; }
-  .analysis-tool-button span { font-size: 7px; }
   .canvas-stage { padding: 9px; }
   .canvas-topline { top: 9px; right: 9px; left: 9px; }
   .graph-count-pill { height: 31px; gap: 5px; padding: 0 8px; font-size: 9px; }
