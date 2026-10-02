@@ -60,7 +60,6 @@
   const measurementCanvas = document.createElement('canvas');
   const measureContext = measurementCanvas.getContext('2d');
 
-  let didLoadSavedGraph = false;
   let commandEntryCounter = 1;
   let graph = loadGraph();
   let graphAnnotation = null;
@@ -171,7 +170,6 @@
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        didLoadSavedGraph = true;
         const loaded = sanitizeGraph(JSON.parse(saved));
         const legacySampleColors = [
           ['#3B82F6', '#000000', 3.5],
@@ -278,6 +276,7 @@
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
+          if (!parsed.length && (graph.nodes.length || graph.edges.length)) return buildCommandEntriesFromGraph(graph);
           return parsed.map((item) => {
             const text = String(item?.text ?? '');
             const entry = createCommandEntry(text, {
@@ -317,7 +316,7 @@
     } catch (error) {
       console.warn('Unable to load saved graph commands:', error);
     }
-    return didLoadSavedGraph ? buildCommandEntriesFromGraph(graph) : [];
+    return buildCommandEntriesFromGraph(graph);
   }
 
   function serializeCommandEntries(entries = commandEntries) {
