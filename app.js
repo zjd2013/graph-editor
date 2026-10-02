@@ -419,11 +419,18 @@
       }
     });
 
+    const latestNodeEntryIds = new Map();
+    const latestEdgeEntryIds = new Map();
+    commandEntries.forEach((entry) => {
+      if (entry.kind === 'node') entry.nodeIds.forEach((id) => latestNodeEntryIds.set(id, entry.id));
+      if (entry.kind === 'edge') entry.edgeIds.forEach((id) => latestEdgeEntryIds.set(id, entry.id));
+    });
+
     commandEntries.forEach((entry) => {
       const hasPendingEdit = entry.kind && entry.text !== entry.appliedText;
       if (entry.kind === 'node') {
         const node = entry.nodeIds.map((id) => afterNodes.get(id)).find(Boolean);
-        if (!node) return;
+        if (!node || latestNodeEntryIds.get(node.id) !== entry.id) return;
         entry.nodeIds = [node.id];
         entry.createdNodeIds = [node.id];
         const canonicalText = formatNodeCommand(node);
@@ -431,7 +438,7 @@
         entry.appliedText = canonicalText;
       } else if (entry.kind === 'edge') {
         const edge = entry.edgeIds.map((id) => afterEdges.get(id)).find(Boolean);
-        if (!edge) return;
+        if (!edge || latestEdgeEntryIds.get(edge.id) !== entry.id) return;
         entry.edgeIds = [edge.id];
         entry.nodeIds = [edge.from, edge.to];
         const sourceText = hasPendingEdit ? entry.appliedText : entry.text;
@@ -1826,7 +1833,8 @@
       }, { syncCommands: false });
     }
     commandEntries = nextEntries;
-    synchronizeCommandEntries(graph, graph);
+    writeCommandInput();
+    persistCommandEntries();
     if (addedNodes || updatedNodes) fitGraph();
     showToast(addedNodes || addedEdges
       ? `已应用 ${updatedCommands} 行命令，新增 ${addedNodes} 个顶点、${addedEdges} 条边。`
