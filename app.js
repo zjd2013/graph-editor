@@ -7,6 +7,7 @@
   const VIEW_WIDTH = 1200;
   const VIEW_HEIGHT = 800;
   const MAX_HISTORY = 80;
+  const MAX_EDGE_LENGTH = 10000;
   const COLORS = [
     { hex: '#FFFFFF', name: '白色' },
     { hex: '#000000', name: '黑色' },
@@ -70,6 +71,7 @@
   const measurementCanvas = document.createElement('canvas');
   const measureContext = measurementCanvas.getContext('2d');
   const mathSvgCache = new Map();
+  const renderedEdgeLabelSizes = new Map();
 
   let commandEntryCounter = 1;
   let graph = loadGraph();
@@ -88,6 +90,7 @@
   let undoStack = [];
   let redoStack = [];
   let toastTimer = 0;
+  let edgeExpansionNeedsFit = false;
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -166,7 +169,7 @@
         style: item?.style === 'dashed' ? 'dashed' : 'solid',
         color: safeColor(item?.color, '#000000'),
         weight: typeof item?.weight === 'string' ? item.weight : (item?.weight == null ? '' : String(item.weight)),
-        length: clamp(Number.isFinite(Number(item?.length)) ? Math.round(Number(item.length)) : 180, 60, 700),
+        length: clamp(Number.isFinite(Number(item?.length)) ? Math.round(Number(item.length)) : 180, 60, MAX_EDGE_LENGTH),
       };
     }).filter(Boolean);
 
@@ -486,12 +489,14 @@
     if (!activeEditBaseline) return;
     const before = activeEditBaseline;
     const commandsBefore = activeEditCommandBaseline || clone(commandEntries);
+    ensureEdgeLabelClearance(graph);
     activeEditBaseline = null;
     activeEditCommandBaseline = null;
     if (JSON.stringify(before) !== JSON.stringify(graph)) {
       pushUndo(before, commandsBefore);
       synchronizeCommandEntries(before, graph);
     }
+    fitGraphAfterEdgeExpansion();
     persistGraph();
     updateHeader();
     updateHistoryButtons();
@@ -512,6 +517,7 @@
     const before = clone(graph);
     const commandsBefore = clone(commandEntries);
     action();
+    ensureEdgeLabelClearance(graph);
     if (JSON.stringify(before) === JSON.stringify(graph)) {
       if (removedAnnotation) renderAll();
       return;
@@ -682,6 +688,97 @@
 
   function measureRichTextWidth(value, font, fontSize) {
     return measureRichTextLayout(value, font, fontSize).width;
+  }
+
+  function ensureEdgeLabelClearance(targetGraph = graph) {
+    if (!targetGraph?.nodes?.length || !targetGraph.edges?.length) return false;
+    if (targetGraph === graph && graphAnnotation) return false;
+
+    const nodeById = new Map(targetGraph.nodes.map((node) => [node.id, node]));
+    const nodeOrder = new Map(targetGraph.nodes.map((node, index) => [node.id, index]));
+    const parallelEdges = new Map();
+    targetGraph.edges.forEach((edge) => {
+      if (!edge.weight || edge.from === edge.to) return;
+      const fromIndex = nodeOrder.get(edge.from);
+      const toIndex = nodeOrder.get(edge.to);
+      if (fromIndex === undefined || toIndex === undefined) return;
+      const firstIndex = Math.min(fromIndex, toIndex);
+      const secondIndex = Math.max(fromIndex, toIndex);
+      const key = `${firstIndex}:${secondIndex}`;
+      if (!parallelEdges.has(key)) {
+        parallelEdges.set(key, {
+          firstId: targetGraph.nodes[firstIndex].id,
+          secondId: targetGraph.nodes[secondIndex].id,
+          firstIndex,
+          secondIndex,
+          edges: [],
+        });
+      }
+      parallelEdges.get(key).edges.push(edge);
+    });
+    if (!parallelEdges.size) return false;
+
+    const radius = nodeRadiusFor(targetGraph.nodes);
+    const pairs = [...parallelEdges.values()].sort((a, b) => (
+      a.firstIndex - b.firstIndex || a.secondIndex - b.secondIndex
+    ));
+    const movedNodes = new Set();
+    let changed = false;
+
+    for (let pass = 0; pass < Math.min(12, pairs.length + 1); pass += 1) {
+      let movedThisPass = false;
+      pairs.forEach((pair) => {
+        const anchor = nodeById.get(pair.firstId);
+        const mover = nodeById.get(pair.secondId);
+        if (!anchor || !mover) return;
+
+        let dx = mover.x - anchor.x;
+        let dy = mover.y - anchor.y;
+        let distance = Math.hypot(dx, dy);
+        if (distance < 1) {
+          const seed = `${pair.firstId}:${pair.secondId}`;
+          const hash = Array.from(seed).reduce((sum, character) => sum + character.charCodeAt(0), 0);
+          const angle = (hash % 360) * Math.PI / 180;
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          distance = 1;
+        }
+        const unitX = dx / distance;
+        const unitY = dy / distance;
+        let requiredDistance = 0;
+        pair.edges.forEach((edge) => {
+          const labelLayout = measureRichTextLayout(edge.weight, '700 12px DM Sans, Manrope, sans-serif', 12);
+          const renderedSize = renderedEdgeLabelSizes.get(edge.id);
+          const measuredSize = renderedSize?.weight === edge.weight ? renderedSize : null;
+          const labelWidth = Math.max(31, labelLayout.width + 17, measuredSize?.width || 0);
+          const labelHeight = Math.max(22, labelLayout.height + 24, measuredSize?.height || 0);
+          const projectedLabelSpan = Math.abs(unitX) * labelWidth + Math.abs(unitY) * labelHeight;
+          const endpointExtent = (radius + anchor.borderWidth / 2 + 2)
+            + (radius + mover.borderWidth / 2 + 2);
+          requiredDistance = Math.max(requiredDistance, endpointExtent + projectedLabelSpan + 24);
+        });
+
+        if (distance + 0.5 >= requiredDistance) return;
+        mover.x = anchor.x + unitX * requiredDistance;
+        mover.y = anchor.y + unitY * requiredDistance;
+        movedNodes.add(mover.id);
+        movedThisPass = true;
+        changed = true;
+      });
+      if (!movedThisPass) break;
+    }
+
+    if (movedNodes.size) {
+      targetGraph.edges.forEach((edge) => {
+        if (edge.from === edge.to || (!movedNodes.has(edge.from) && !movedNodes.has(edge.to))) return;
+        const from = nodeById.get(edge.from);
+        const to = nodeById.get(edge.to);
+        if (!from || !to) return;
+        edge.length = Math.round(Math.hypot(to.x - from.x, to.y - from.y));
+      });
+      if (targetGraph === graph) edgeExpansionNeedsFit = true;
+    }
+    return changed;
   }
 
   function renderRichText(value, options) {
@@ -974,41 +1071,52 @@
     $$('.edge-label', world).forEach((labelGroup) => {
       const labelText = $('.edge-label-text', labelGroup);
       const background = $('.edge-label-bg', labelGroup);
-      if (!labelText?.querySelector('svg') || !background || typeof labelText.getBBox !== 'function') return;
+      if (!background) return;
 
-      try {
-        const bounds = labelText.getBBox();
-        if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) return;
-        const x = Number(background.getAttribute('x')) || 0;
-        const y = Number(background.getAttribute('y')) || 0;
-        const width = Number(background.getAttribute('width')) || 31;
-        const height = Number(background.getAttribute('height')) || 22;
-        const paddingX = 8.5;
-        const paddingY = 12;
-        const halfWidth = Math.max(
-          15.5,
-          Math.abs(x),
-          Math.abs(x + width),
-          Math.abs(bounds.x - paddingX),
-          Math.abs(bounds.x + bounds.width + paddingX),
-        );
-        const halfHeight = Math.max(
-          11,
-          Math.abs(y),
-          Math.abs(y + height),
-          Math.abs(bounds.y - paddingY),
-          Math.abs(bounds.y + bounds.height + paddingY),
-        );
-        if (halfWidth * 2 > width + 0.5) {
-          background.setAttribute('x', String(-halfWidth));
-          background.setAttribute('width', String(halfWidth * 2));
+      if (labelText?.querySelector('svg') && typeof labelText.getBBox === 'function') {
+        try {
+          const bounds = labelText.getBBox();
+          if ([bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
+            const x = Number(background.getAttribute('x')) || 0;
+            const y = Number(background.getAttribute('y')) || 0;
+            const width = Number(background.getAttribute('width')) || 31;
+            const height = Number(background.getAttribute('height')) || 22;
+            const paddingX = 8.5;
+            const paddingY = 12;
+            const halfWidth = Math.max(
+              15.5,
+              Math.abs(x),
+              Math.abs(x + width),
+              Math.abs(bounds.x - paddingX),
+              Math.abs(bounds.x + bounds.width + paddingX),
+            );
+            const halfHeight = Math.max(
+              11,
+              Math.abs(y),
+              Math.abs(y + height),
+              Math.abs(bounds.y - paddingY),
+              Math.abs(bounds.y + bounds.height + paddingY),
+            );
+            if (halfWidth * 2 > width + 0.5) {
+              background.setAttribute('x', String(-halfWidth));
+              background.setAttribute('width', String(halfWidth * 2));
+            }
+            if (halfHeight * 2 > height + 0.5) {
+              background.setAttribute('y', String(-halfHeight));
+              background.setAttribute('height', String(halfHeight * 2));
+            }
+          }
+        } catch (error) {
+          // SVG getBBox can be unavailable for detached or unsupported SVG nodes.
         }
-        if (halfHeight * 2 > height + 0.5) {
-          background.setAttribute('y', String(-halfHeight));
-          background.setAttribute('height', String(halfHeight * 2));
-        }
-      } catch (error) {
-        // SVG getBBox can be unavailable for detached or unsupported SVG nodes.
+      }
+
+      const edgeId = labelGroup.parentElement?.dataset.id;
+      const width = Number(background.getAttribute('width'));
+      const height = Number(background.getAttribute('height'));
+      const edge = graph.edges.find((item) => item.id === edgeId);
+      if (edgeId && edge && Number.isFinite(width) && Number.isFinite(height)) {
+        renderedEdgeLabelSizes.set(edgeId, { width, height, weight: edge.weight });
       }
     });
   }
@@ -1049,7 +1157,7 @@
     return fragments;
   }
 
-  function renderScene() {
+  function renderScene(edgeFitPass = 0) {
     const radius = nodeRadius();
     const nodeOrder = new Map(graph.nodes.map((node, index) => [node.id, index]));
     const groups = new Map();
@@ -1070,9 +1178,14 @@
       if (element) fragments.appendChild(element);
     }));
     graph.nodes.forEach((node) => fragments.appendChild(renderNode(node, radius)));
+    renderedEdgeLabelSizes.clear();
     world.replaceChildren(fragments);
     world.setAttribute('transform', `translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
     fitMathEdgeLabelBackgrounds();
+    if (!graphAnnotation && edgeFitPass < 4 && ensureEdgeLabelClearance(graph)) {
+      renderScene(edgeFitPass + 1);
+      return;
+    }
     canvasSurface.dataset.mode = mode;
     $('#canvas-background').classList.toggle('grid-hidden', !$('#grid-toggle').classList.contains('is-on'));
     updateZoomLabel();
@@ -1161,7 +1274,7 @@
     const to = graph.nodes.find((node) => node.id === edge.to);
     const radius = nodeRadius();
     const minLength = Math.max(70, Math.ceil(radius * 2 + 22));
-    const maxLength = Math.max(700, minLength + 500);
+    const maxLength = Math.min(MAX_EDGE_LENGTH, Math.max(700, minLength + 500, Math.ceil(edge.length) + 500));
     const length = clamp(Math.round(edge.length), minLength, maxLength);
     const fromLabel = from?.label || edge.from;
     const toLabel = to?.label || edge.to;
@@ -1359,7 +1472,7 @@
         let length = Number(value);
         if (!Number.isFinite(length)) return;
         const min = Math.max(70, Math.ceil(nodeRadius() * 2 + 22));
-        const max = Math.max(700, min + 500);
+        const max = Math.min(MAX_EDGE_LENGTH, Math.max(700, min + 500, Math.ceil(target.length) + 500));
         length = clamp(Math.round(length), min, max);
         target.length = length;
         control.value = String(length);
@@ -1381,8 +1494,21 @@
         target[property] = value;
       }
     }
+    ensureEdgeLabelClearance(graph);
     synchronizeCommandEntries(before, graph);
     renderScene();
+    if (edgeExpansionNeedsFit && selected?.type === 'edge') {
+      const selectedEdge = graph.edges.find((edge) => edge.id === selected.id);
+      if (selectedEdge) {
+        const minLength = Math.max(70, Math.ceil(nodeRadius() * 2 + 22));
+        const maxLength = Math.min(MAX_EDGE_LENGTH, Math.max(700, minLength + 500, Math.ceil(selectedEdge.length) + 500));
+        $$('[data-field="edge.length"]', inspectorContent).forEach((lengthControl) => {
+          lengthControl.min = String(minLength);
+          lengthControl.max = String(maxLength);
+          lengthControl.value = String(selectedEdge.length);
+        });
+      }
+    }
     persistGraph();
     updateHeader();
     updateSelectionSummary();
@@ -1462,7 +1588,9 @@
   }
 
   function renderAll() {
-    renderScene();
+    ensureEdgeLabelClearance(graph);
+    if (!edgeExpansionNeedsFit || graphAnnotation) renderScene();
+    fitGraphAfterEdgeExpansion();
     updateHeader();
     updateAnnotationToolbar();
     updateHistoryButtons();
@@ -2222,6 +2350,7 @@
     try { svg.releasePointerCapture(event.pointerId); } catch (_) { /* pointer may already be released */ }
     if (finishedDrag.kind === 'node' && finishedDrag.moved) {
       if (JSON.stringify(finishedDrag.before) !== JSON.stringify(graph)) pushUndo(finishedDrag.before);
+      fitGraphAfterEdgeExpansion();
       persistGraph();
       renderInspector();
       updateHeader();
@@ -2302,6 +2431,13 @@
     camera.x = (VIEW_WIDTH - (minX + maxX) * scale) / 2;
     camera.y = (VIEW_HEIGHT - (minY + maxY) * scale) / 2;
     renderScene();
+  }
+
+  function fitGraphAfterEdgeExpansion() {
+    for (let attempt = 0; attempt < 2 && edgeExpansionNeedsFit && !graphAnnotation; attempt += 1) {
+      edgeExpansionNeedsFit = false;
+      fitGraph();
+    }
   }
 
   function makeUnderlyingAdjacency(ignoreDirection = false) {
@@ -3146,7 +3282,13 @@
 
   function refreshMathRendering() {
     mathSvgCache.clear();
+    const expanded = ensureEdgeLabelClearance(graph);
+    if (expanded || edgeExpansionNeedsFit) {
+      renderAll();
+      return;
+    }
     renderScene();
+    if (edgeExpansionNeedsFit) renderAll();
   }
 
   window.addEventListener('graph-studio-mathjax-ready', refreshMathRendering);
