@@ -78,6 +78,7 @@
   let undoStack = [];
   let redoStack = [];
   let toastTimer = 0;
+  let commandInputApplyTimer = 0;
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -1575,20 +1576,48 @@
     }
   }
 
-  function applyPendingNodeToEdgeConversions() {
-    const entryIds = commandEntries.filter((entry) => {
-      if (entry.kind !== 'node' || entry.text === entry.appliedText) return false;
-      try {
-        const previousTokenCount = tokenizeCommandLine(entry.appliedText).length;
-        const currentTokenCount = tokenizeCommandLine(entry.text).length;
-        return previousTokenCount >= 1 && previousTokenCount <= 2
-          && currentTokenCount >= 3 && currentTokenCount <= 4;
-      } catch (_) {
-        return false;
-      }
-    }).map((entry) => entry.id);
+  function commandEntryCanAutoApply(entry) {
+    if (!commandEntryIsComplete(entry)) return false;
+    try {
+      const tokens = tokenizeCommandLine(entry.text);
+      if (!tokens.length || !tokens[0]) return false;
+      if (tokens.length >= 3 && !tokens[1]) return false;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function applyPendingCommandEntries() {
+    const entryIds = commandEntries.filter((entry) => entry.text.trim()
+      && (!entry.kind || entry.text !== entry.appliedText)
+      && commandEntryCanAutoApply(entry))
+      .map((entry) => entry.id);
     if (!entryIds.length) return false;
     return applyBulkInput(entryIds);
+  }
+
+  function scheduleCommandInputApply() {
+    window.clearTimeout(commandInputApplyTimer);
+    commandInputApplyTimer = window.setTimeout(() => {
+      commandInputApplyTimer = 0;
+      reconcileCommandInput();
+      applyPendingCommandEntries();
+    }, 400);
+  }
+
+  function handleCommandInput(event) {
+    reconcileCommandInput();
+    window.clearTimeout(commandInputApplyTimer);
+    commandInputApplyTimer = 0;
+    if (!event.isComposing) scheduleCommandInputApply();
+  }
+
+  function flushCommandInputApply() {
+    window.clearTimeout(commandInputApplyTimer);
+    commandInputApplyTimer = 0;
+    reconcileCommandInput();
+    applyPendingCommandEntries();
   }
 
   function applyBulkInput(entryIds = null) {
@@ -2772,10 +2801,13 @@
       event.currentTarget.setAttribute('aria-label', collapsed ? '展开输入栏' : '收起输入栏');
       event.currentTarget.title = collapsed ? '展开输入栏' : '收起输入栏';
     });
-    commandInput.addEventListener('input', (event) => {
-      reconcileCommandInput();
-      if (!event.isComposing) applyPendingNodeToEdgeConversions();
+    commandInput.addEventListener('input', handleCommandInput);
+    commandInput.addEventListener('compositionstart', () => {
+      window.clearTimeout(commandInputApplyTimer);
+      commandInputApplyTimer = 0;
     });
+    commandInput.addEventListener('compositionend', () => handleCommandInput({ isComposing: false }));
+    commandInput.addEventListener('blur', flushCommandInputApply);
     commandInput.addEventListener('keydown', (event) => {
       if (event.isComposing) return;
       if (event.key === 'Enter') {
