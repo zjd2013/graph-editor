@@ -64,31 +64,29 @@
     </header>
 
     <main class="editor-layout">
-      <nav class="tool-rail" aria-label="编辑工具">
-        <div class="tool-group">
-          <span class="rail-label">工具</span>
-          <button class="tool-button active" type="button" data-mode="select" title="选择 / 拖动 (V)" aria-label="选择或拖动顶点">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 3 14 10-6.3 1.2L10 20 5 3Z" /></svg>
-            <span>选择</span>
-            <kbd>V</kbd>
-          </button>
-          <button class="tool-button" type="button" data-mode="node" title="添加顶点 (N)" aria-label="添加顶点">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 8v8M8 12h8" /></svg>
-            <span>顶点</span>
-            <kbd>N</kbd>
-          </button>
-          <button class="tool-button" type="button" data-mode="edge" title="连接顶点 (E)" aria-label="连接顶点">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="17.5" r="3" /><circle cx="18" cy="6.5" r="3" /><path d="m8.2 15.5 7.6-7" /></svg>
-            <span>连边</span>
-            <kbd>E</kbd>
+      <aside id="command-sidebar" class="command-sidebar" aria-label="批量图输入">
+        <div class="command-sidebar-header">
+          <div class="command-sidebar-brand">
+            <span class="command-brand-icon" aria-hidden="true">{ }</span>
+            <span class="command-sidebar-title"><small>GRAPH COMMANDS</small><strong>批量输入</strong></span>
+          </div>
+          <button id="toggle-command-sidebar" class="collapse-sidebar-button" type="button" aria-label="收起输入栏" title="收起输入栏" aria-expanded="true" aria-controls="command-sidebar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7" /></svg>
           </button>
         </div>
-        <div class="rail-bottom">
-          <button id="help-button" class="rail-help" type="button" title="快捷操作提示" aria-label="快捷操作提示">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9.7 9a2.4 2.4 0 1 1 4.2 1.6c-1.2 1.1-1.9 1.4-1.9 3M12 17.3v.1" /></svg>
-          </button>
+        <div class="command-sidebar-body">
+          <label class="command-input-label" for="bulk-command-input">每行一条命令</label>
+          <textarea id="bulk-command-input" rows="9" spellcheck="false" aria-label="逐行输入顶点和边" placeholder="u&#10;v 12&#10;u v 1&#10;u v cost 0"></textarea>
+          <div class="command-syntax-list">
+            <div><code>u</code><span>加点，无点权</span></div>
+            <div><code>u w</code><span>加点，w 为点权</span></div>
+            <div><code>u v d</code><span>加边，无边权</span></div>
+            <div><code>u v w d</code><span>加边，w 为边权</span></div>
+          </div>
+          <div class="command-direction-note"><strong>d = 1</strong> 有向边；其他值为无向边。找不到的端点会自动加点。含空格的字符串请加引号。</div>
+          <div class="command-enter-note"><kbd>Enter</kbd><span>自动应用当前输入</span><kbd>Shift</kbd><span>+ Enter 换行</span></div>
         </div>
-      </nav>
+      </aside>
 
       <section class="canvas-stage" aria-label="图编辑画布">
         <div class="canvas-topline">
@@ -132,15 +130,47 @@
         </div>
       </section>
 
+      <nav class="tool-rail" aria-label="编辑工具">
+        <div class="tool-group">
+          <span class="rail-label">工具</span>
+          <button class="tool-button active" type="button" data-mode="select" title="选择 / 拖动 (V)" aria-label="选择或拖动顶点">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 3 14 10-6.3 1.2L10 20 5 3Z" /></svg>
+            <span>选择</span>
+            <kbd>V</kbd>
+          </button>
+          <button class="tool-button" type="button" data-mode="node" title="添加顶点 (N)" aria-label="添加顶点">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 8v8M8 12h8" /></svg>
+            <span>顶点</span>
+            <kbd>N</kbd>
+          </button>
+          <button class="tool-button" type="button" data-mode="edge" title="连接顶点 (E)" aria-label="连接顶点">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="17.5" r="3" /><circle cx="18" cy="6.5" r="3" /><path d="m8.2 15.5 7.6-7" /></svg>
+            <span>连边</span>
+            <kbd>E</kbd>
+          </button>
+        </div>
+        <div class="rail-bottom">
+          <button id="help-button" class="rail-help" type="button" title="快捷操作提示" aria-label="快捷操作提示">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9.7 9a2.4 2.4 0 1 1 4.2 1.6c-1.2 1.1-1.9 1.4-1.9 3M12 17.3v.1" /></svg>
+          </button>
+        </div>
+      </nav>
+
       <aside class="inspector" aria-label="属性面板">
         <div class="inspector-heading">
           <div>
             <span class="panel-eyebrow">WORKSPACE</span>
             <h1 id="inspector-title">图属性</h1>
           </div>
-          <button id="clear-selection" class="clear-selection-button" type="button" title="取消选择" aria-label="取消选择" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" /></svg>
-          </button>
+          <div class="inspector-heading-actions">
+            <button id="tree-layout-button" class="tree-layout-button" type="button" title="以所选顶点为根自动整理树形布局；重边和自环不参与层级计算">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M12 7v5m0 0-6 4m6-4 6 4"/></svg>
+              <span>整理成树</span>
+            </button>
+            <button id="clear-selection" class="clear-selection-button" type="button" title="取消选择" aria-label="取消选择" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" /></svg>
+            </button>
+          </div>
         </div>
         <div class="inspector-tabs" role="tablist" aria-label="侧栏视图">
           <button class="inspector-tab active" type="button" data-tab="properties" role="tab" aria-selected="true">属性</button>

@@ -41,6 +41,8 @@
   const zoomLabelEl = $('#zoom-label');
   const modeHintEl = $('#mode-hint');
   const connectToast = $('#connect-toast');
+  const commandSidebar = $('#command-sidebar');
+  const commandInput = $('#bulk-command-input');
 
   const measurementCanvas = document.createElement('canvas');
   const measureContext = measurementCanvas.getContext('2d');
@@ -659,24 +661,7 @@
     }).join('');
 
     return `
-      <p class="structure-intro">输入按行自上而下执行；边端点需已存在或先在上方加点。点击列表元素可查看属性，重边可分别设置。</p>
-      <section class="command-panel" aria-labelledby="command-title">
-        <div class="command-panel-heading">
-          <div><strong id="command-title">批量输入</strong><span>每行一条，空格分隔</span></div>
-          <span class="command-key">1–4 项</span>
-        </div>
-        <textarea id="bulk-command-input" rows="4" spellcheck="false" aria-label="批量图输入" placeholder="u&#10;v 12&#10;u v 1&#10;u v cost 0"></textarea>
-        <div class="command-format-hint">
-          <span><code>u</code>：加点</span>
-          <span><code>u 权</code>：加点并设置点权</span>
-          <span><code>u v 1</code>：无权有向边；否则无向</span>
-          <span><code>u v 权 1</code>：带权有向边；末项非 1 则无向</span>
-        </div>
-        <div class="command-panel-actions">
-          <span>端点可用标签或 ID；字符串含空格请加引号</span>
-          <button id="apply-command-button" type="button">应用输入 <span>↵</span></button>
-        </div>
-      </section>
+      <p class="structure-intro">点击列表元素可查看和编辑属性。重边可分别设置；自环也会显示在边列表中。</p>
       <section class="structure-section">
         <div class="structure-section-head"><span>顶点</span><span>${graph.nodes.length} 个</span></div>
         <div class="structure-list">${nodeRows || '<div class="structure-empty">还没有顶点</div>'}</div>
@@ -724,7 +709,6 @@
       $$('.structure-item', inspectorContent).forEach((button) => {
         button.addEventListener('click', () => setSelection(button.dataset.selectType, button.dataset.selectId));
       });
-      bindBulkInputPanel();
       return;
     }
 
@@ -738,18 +722,6 @@
       inspectorContent.innerHTML = renderGraphOverview();
     }
     bindInspectorControls();
-  }
-
-  function bindBulkInputPanel() {
-    const input = $('#bulk-command-input', inspectorContent);
-    const applyButton = $('#apply-command-button', inspectorContent);
-    applyButton?.addEventListener('click', applyBulkInput);
-    input?.addEventListener('keydown', (event) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-        event.preventDefault();
-        applyBulkInput();
-      }
-    });
   }
 
   function bindInspectorControls() {
@@ -783,14 +755,11 @@
     $$('[data-command-example]', inspectorContent).forEach((button) => {
       button.addEventListener('click', () => {
         finishEdit();
-        inspectorTab = 'structure';
-        renderInspector();
-        const input = $('#bulk-command-input', inspectorContent);
         const line = button.dataset.commandExample;
-        const current = input.value;
-        input.value = current ? `${current}${current.endsWith('\n') ? '' : '\n'}${line}` : line;
-        input.focus();
-        input.setSelectionRange(input.value.length, input.value.length);
+        const current = commandInput.value;
+        commandInput.value = current ? `${current}${current.endsWith('\n') ? '' : '\n'}${line}` : line;
+        commandInput.focus();
+        commandInput.setSelectionRange(commandInput.value.length, commandInput.value.length);
       });
     });
   }
@@ -1043,6 +1012,24 @@
     return { node: null, ambiguous: matches.length > 1 };
   }
 
+  function ensureCommandNode(nodes, token, existing = lookupNodeIn(nodes, token)) {
+    if (!token) return { node: null, ambiguous: false, created: false };
+    if (existing.node || existing.ambiguous) return { ...existing, created: false };
+    const point = nextCommandPosition(nodes, token, '');
+    const node = {
+      id: createUniqueId('v', nodes),
+      label: token,
+      weight: '',
+      x: point.x,
+      y: point.y,
+      color: '#FFFFFF',
+      borderColor: '#000000',
+      borderWidth: 2,
+    };
+    nodes.push(node);
+    return { node, ambiguous: false, created: true };
+  }
+
   function nextCommandPosition(nodes, label, weight) {
     if (!nodes.length) return { x: 600, y: 400 };
     const center = {
@@ -1068,14 +1055,11 @@
     return { x: center.x + spacing * 2, y: center.y + spacing * 2 };
   }
 
-  function applyBulkInput() {
-    const input = $('#bulk-command-input', inspectorContent);
-    if (!input) return;
-    const lines = input.value.split(/\r?\n/);
+  function applyBulkInput(sourceText = commandInput.value) {
+    const lines = String(sourceText).split(/\r?\n/);
     if (!lines.some((line) => line.trim())) {
-      showToast('请先在文本框中输入命令。', true);
-      input.focus();
-      return;
+      showToast('请先输入一条图命令。', true);
+      return false;
     }
 
     const draft = clone(graph);
@@ -1124,14 +1108,20 @@
         return;
       }
 
-      const fromResult = lookupNodeIn(draft.nodes, tokens[0]);
-      const toResult = lookupNodeIn(draft.nodes, tokens[1]);
+      const fromLookup = lookupNodeIn(draft.nodes, tokens[0]);
+      const toLookup = lookupNodeIn(draft.nodes, tokens[1]);
+      const fromResult = ensureCommandNode(draft.nodes, tokens[0], fromLookup);
+      const toResult = tokens[0] === tokens[1]
+        ? fromResult
+        : ensureCommandNode(draft.nodes, tokens[1], toLookup);
+      if (fromResult.created) addedNodes += 1;
+      if (toResult.created) addedNodes += 1;
       if (!fromResult.node || !toResult.node) {
         const token = !fromResult.node ? tokens[0] : tokens[1];
         const result = !fromResult.node ? fromResult : toResult;
         errors.push(result.ambiguous
           ? `第 ${index + 1} 行：「${token}」标签重复，请使用顶点 ID`
-          : `第 ${index + 1} 行：找不到顶点「${token}」`);
+          : `第 ${index + 1} 行：顶点名不能为空`);
         return;
       }
       const directionFlag = tokens.length === 3 ? tokens[2] : tokens[3];
@@ -1156,15 +1146,14 @@
       const detail = errors.slice(0, 2).join('；');
       const remainder = errors.length > 2 ? `（另有 ${errors.length - 2} 个错误）` : '';
       showToast(`${detail}${remainder}`, true);
-      return;
+      return false;
     }
     if (!addedNodes && !addedEdges) {
       showToast('没有可应用的输入。', true);
-      return;
+      return false;
     }
 
     const shouldFit = addedNodes > 0;
-    input.value = '';
     commitMutation(() => {
       graph = draft;
       if (selected && !selectionExists(selected)) selected = null;
@@ -1172,6 +1161,7 @@
     });
     if (shouldFit) fitGraph();
     showToast(`已添加 ${addedNodes} 个顶点、${addedEdges} 条边。`);
+    return true;
   }
 
   function handleEdgeEndpoint(id) {
@@ -1408,6 +1398,103 @@
     renderScene();
   }
 
+  function arrangeAsTree() {
+    if (!graph.nodes.length) {
+      showToast('没有顶点可整理。', true);
+      return;
+    }
+
+    const nodeOrder = new Map(graph.nodes.map((node, index) => [node.id, index]));
+    const adjacency = new Map(graph.nodes.map((node) => [node.id, new Set()]));
+    graph.edges.forEach((edge) => {
+      if (edge.from === edge.to || !adjacency.has(edge.from) || !adjacency.has(edge.to)) return;
+      adjacency.get(edge.from).add(edge.to);
+      adjacency.get(edge.to).add(edge.from);
+    });
+
+    const roots = [];
+    const children = new Map(graph.nodes.map((node) => [node.id, []]));
+    const visited = new Set();
+    const preferredRoot = selected?.type === 'node' && adjacency.has(selected.id) ? selected.id : graph.nodes[0].id;
+    const candidates = [preferredRoot, ...graph.nodes.map((node) => node.id)];
+
+    candidates.forEach((root) => {
+      if (visited.has(root)) return;
+      roots.push(root);
+      visited.add(root);
+      const queue = [root];
+      for (let cursor = 0; cursor < queue.length; cursor += 1) {
+        const current = queue[cursor];
+        const neighbors = [...(adjacency.get(current) || [])].sort((a, b) => nodeOrder.get(a) - nodeOrder.get(b));
+        neighbors.forEach((neighbor) => {
+          if (visited.has(neighbor)) return;
+          visited.add(neighbor);
+          children.get(current).push(neighbor);
+          queue.push(neighbor);
+        });
+      }
+    });
+
+    const leafCounts = new Map();
+    function countLeaves(nodeId) {
+      if (leafCounts.has(nodeId)) return leafCounts.get(nodeId);
+      const descendants = children.get(nodeId) || [];
+      const count = descendants.length
+        ? descendants.reduce((total, childId) => total + countLeaves(childId), 0)
+        : 1;
+      leafCounts.set(nodeId, count);
+      return count;
+    }
+
+    const radius = nodeRadius();
+    const slotWidth = Math.max(165, radius * 2 + 92);
+    const componentGap = Math.max(75, slotWidth * 0.45);
+    const componentLeafCounts = roots.map(countLeaves);
+    const totalWidth = componentLeafCounts.reduce((total, count) => total + count * slotWidth, 0)
+      + Math.max(0, roots.length - 1) * componentGap;
+    const verticalGap = Math.max(155, radius * 2 + 90);
+    const top = 115;
+    let left = 600 - totalWidth / 2;
+    const positions = new Map();
+
+    function place(nodeId, xLeft, width, depth) {
+      positions.set(nodeId, { x: xLeft + width / 2, y: top + depth * verticalGap });
+      const descendants = children.get(nodeId) || [];
+      if (!descendants.length) return;
+      const descendantLeaves = descendants.reduce((total, childId) => total + countLeaves(childId), 0);
+      let childLeft = xLeft;
+      descendants.forEach((childId) => {
+        const childWidth = width * countLeaves(childId) / descendantLeaves;
+        place(childId, childLeft, childWidth, depth + 1);
+        childLeft += childWidth;
+      });
+    }
+
+    roots.forEach((root, index) => {
+      const width = componentLeafCounts[index] * slotWidth;
+      place(root, left, width, 0);
+      left += width + componentGap;
+    });
+
+    commitMutation(() => {
+      graph.nodes.forEach((node) => {
+        const position = positions.get(node.id);
+        if (position) {
+          node.x = position.x;
+          node.y = position.y;
+        }
+      });
+      graph.edges.forEach((edge) => {
+        if (edge.from === edge.to) return;
+        const from = graph.nodes.find((node) => node.id === edge.from);
+        const to = graph.nodes.find((node) => node.id === edge.to);
+        if (from && to) edge.length = edgeDistance(from, to);
+      });
+    });
+    fitGraph();
+    showToast(`已整理为树形布局（${roots.length} 个连通分量）；原有边、自环与重边均保留。`);
+  }
+
   function showToast(message, isError = false) {
     let toast = $('.toast-message');
     if (!toast) {
@@ -1561,6 +1648,19 @@
       event.currentTarget.setAttribute('aria-pressed', String(event.currentTarget.classList.contains('is-on')));
     });
     $('#clear-selection').addEventListener('click', clearSelection);
+    $('#tree-layout-button').addEventListener('click', arrangeAsTree);
+    $('#toggle-command-sidebar').addEventListener('click', (event) => {
+      const collapsed = commandSidebar.classList.toggle('collapsed');
+      event.currentTarget.setAttribute('aria-expanded', String(!collapsed));
+      event.currentTarget.setAttribute('aria-label', collapsed ? '展开输入栏' : '收起输入栏');
+      event.currentTarget.title = collapsed ? '展开输入栏' : '收起输入栏';
+    });
+    commandInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        if (commandInput.value.trim() && applyBulkInput(commandInput.value)) commandInput.value = '';
+      }
+    });
     $('#import-button').addEventListener('click', () => hiddenFileInput.click());
     hiddenFileInput.addEventListener('change', (event) => importFile(event.target.files?.[0]));
     $('#export-toggle').addEventListener('click', () => toggleExportMenu());
