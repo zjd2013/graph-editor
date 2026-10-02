@@ -99,7 +99,7 @@
             <div><code>u v d</code><span>加边，无边权</span></div>
             <div><code>u v w d</code><span>加边，w 为边权</span></div>
           </div>
-          <div class="command-direction-note"><strong>d = 0</strong> 有向边；其他值为无向边，标记值原样保留。找不到的端点会自动加点；重复顶点命令会复用已有点，但各行命令保持独立。含空格的字符串请加引号。</div>
+          <div class="command-direction-note"><strong>d = 0</strong> 有向边；其他值为无向边，标记值原样保留。找不到的端点会自动加点；重复顶点命令会复用已有点，但各行命令保持独立。含空格的字符串请加引号；LaTeX 命令中的反斜杠会原样保留。</div>
           <div class="command-enter-note"><kbd>Enter</kbd><span>换行并应用上一行</span><kbd>Backspace</kbd><span>本行仍有效时重应用</span></div>
           <p class="command-sync-note">初始图的顶点和边也会生成对应命令行。每次输入使命令格式有效后，会立即应用或更新，无需回车；点命令改成边命令时，原顶点作为端点复用会清空点权。点击新增的顶点、边会填入第一个空行；没有空行时追加新行。标签、权值、端点和方向等字段会同步到最近一条对应命令，早先行保留原值。删除已应用的命令行会移除对应图元素。</p>
           <p class="command-sync-note">顶点标签、点权和边权支持 LaTeX：用 <code>$...$</code> 或 <code>\(...\)</code> 包住公式，例如 <code>$\neq$</code>。</p>

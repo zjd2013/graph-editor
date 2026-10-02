@@ -1486,7 +1486,9 @@
     let tokenStarted = false;
     for (const character of line) {
       if (escaped) {
-        current += character;
+        current += character === '\\' || character === '"' || character === "'" || /\s/.test(character)
+          ? character
+          : `\\${character}`;
         escaped = false;
         tokenStarted = true;
       } else if (character === '\\') {
