@@ -78,7 +78,6 @@
   let undoStack = [];
   let redoStack = [];
   let toastTimer = 0;
-  let commandInputApplyTimer = 0;
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -1576,8 +1575,9 @@
     }
   }
 
-  function commandEntryCanAutoApply(entry) {
+  function commandEntryCanAutoApply(entry, { allowTrailingWhitespace = false } = {}) {
     if (!commandEntryIsComplete(entry)) return false;
+    if (!allowTrailingWhitespace && /\s$/.test(entry.text)) return false;
     try {
       const tokens = tokenizeCommandLine(entry.text);
       if (!tokens.length || !tokens[0]) return false;
@@ -1588,36 +1588,23 @@
     }
   }
 
-  function applyPendingCommandEntries() {
+  function applyPendingCommandEntries(options = {}) {
     const entryIds = commandEntries.filter((entry) => entry.text.trim()
       && (!entry.kind || entry.text !== entry.appliedText)
-      && commandEntryCanAutoApply(entry))
+      && commandEntryCanAutoApply(entry, options))
       .map((entry) => entry.id);
     if (!entryIds.length) return false;
     return applyBulkInput(entryIds);
   }
 
-  function scheduleCommandInputApply() {
-    window.clearTimeout(commandInputApplyTimer);
-    commandInputApplyTimer = window.setTimeout(() => {
-      commandInputApplyTimer = 0;
-      reconcileCommandInput();
-      applyPendingCommandEntries();
-    }, 400);
-  }
-
   function handleCommandInput(event) {
     reconcileCommandInput();
-    window.clearTimeout(commandInputApplyTimer);
-    commandInputApplyTimer = 0;
-    if (!event.isComposing) scheduleCommandInputApply();
+    if (!event.isComposing) applyPendingCommandEntries();
   }
 
   function flushCommandInputApply() {
-    window.clearTimeout(commandInputApplyTimer);
-    commandInputApplyTimer = 0;
     reconcileCommandInput();
-    applyPendingCommandEntries();
+    applyPendingCommandEntries({ allowTrailingWhitespace: true });
   }
 
   function applyBulkInput(entryIds = null) {
@@ -2802,10 +2789,6 @@
       event.currentTarget.title = collapsed ? '展开输入栏' : '收起输入栏';
     });
     commandInput.addEventListener('input', handleCommandInput);
-    commandInput.addEventListener('compositionstart', () => {
-      window.clearTimeout(commandInputApplyTimer);
-      commandInputApplyTimer = 0;
-    });
     commandInput.addEventListener('compositionend', () => handleCommandInput({ isComposing: false }));
     commandInput.addEventListener('blur', flushCommandInputApply);
     commandInput.addEventListener('keydown', (event) => {
