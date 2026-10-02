@@ -26,6 +26,16 @@
     { hex: '#EC4899', name: '粉色' },
   ];
   const COLOR_SET = new Set(COLORS.map((color) => color.hex));
+  const MATH_UNICODE_SYMBOLS = {
+    neq: '≠', ne: '≠', leq: '≤', le: '≤', geq: '≥', ge: '≥',
+    times: '×', cdot: '·', pm: '±', mp: '∓', infty: '∞',
+    to: '→', rightarrow: '→', leftarrow: '←', Rightarrow: '⇒', Leftarrow: '⇐',
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', theta: 'θ',
+    lambda: 'λ', mu: 'μ', pi: 'π', sigma: 'σ', omega: 'ω',
+    sum: '∑', prod: '∏', int: '∫', sqrt: '√', forall: '∀', exists: '∃',
+    in: '∈', notin: '∉', subset: '⊂', subseteq: '⊆', cup: '∪', cap: '∩',
+    approx: '≈', equiv: '≡',
+  };
   const EDGE_TYPE_STYLES = {
     tree: { label: '树边', color: '#000000' },
     back: { label: '返祖边', color: '#EF4444' },
@@ -59,6 +69,7 @@
 
   const measurementCanvas = document.createElement('canvas');
   const measureContext = measurementCanvas.getContext('2d');
+  const mathSvgCache = new Map();
 
   let commandEntryCounter = 1;
   let graph = loadGraph();
@@ -579,6 +590,161 @@
     return measureContext.measureText(String(text)).width;
   }
 
+  function splitMathText(value) {
+    const text = String(value ?? '');
+    const delimiter = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
+    const segments = [];
+    let cursor = 0;
+    let match;
+    while ((match = delimiter.exec(text))) {
+      if (match.index > cursor) segments.push({ type: 'text', value: text.slice(cursor, match.index) });
+      segments.push({ type: 'math', value: match[1] ?? match[2] ?? match[3] ?? match[4] });
+      cursor = delimiter.lastIndex;
+    }
+    if (cursor < text.length || !segments.length) segments.push({ type: 'text', value: text.slice(cursor) });
+    return segments;
+  }
+
+  function mathFallbackText(expression) {
+    return String(expression)
+      .replace(/\\not\s*=/g, '≠')
+      .replace(/\\left\b|\\right\b/g, '')
+      .replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '$1/$2')
+      .replace(/\\(?:text|mathrm|mathbf|mathit|operatorname)\s*\{([^{}]*)\}/g, '$1')
+      .replace(/\\([a-zA-Z]+)\b/g, (command, name) => MATH_UNICODE_SYMBOLS[name] || name)
+      .replace(/[{}]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function svgDimensionInPixels(value, fontSize) {
+    const match = String(value || '').trim().match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(ex|em|px|pt|pc|in|cm|mm)?$/i);
+    if (!match) return 0;
+    const amount = Number(match[1]);
+    const unit = (match[2] || 'px').toLowerCase();
+    const unitScale = {
+      ex: fontSize / 2,
+      em: fontSize,
+      px: 1,
+      pt: 96 / 72,
+      pc: 16,
+      in: 96,
+      cm: 96 / 2.54,
+      mm: 96 / 25.4,
+    }[unit];
+    return Number.isFinite(amount * unitScale) ? amount * unitScale : 0;
+  }
+
+  function mathSvgMetrics(expression, fontSize) {
+    const mathJax = window.MathJax;
+    if (!mathJax || typeof mathJax.tex2svg !== 'function') return null;
+    const cacheKey = `${fontSize}\u0000${expression}`;
+    if (mathSvgCache.has(cacheKey)) return mathSvgCache.get(cacheKey);
+
+    try {
+      const wrapper = mathJax.tex2svg(expression, { display: false, em: fontSize, ex: fontSize / 2 });
+      const source = wrapper?.querySelector?.('svg') || (wrapper?.tagName?.toLowerCase() === 'svg' ? wrapper : null);
+      if (!source) return null;
+      const viewBox = (source.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+      const width = svgDimensionInPixels(source.getAttribute('width'), fontSize)
+        || (viewBox.length === 4 ? Math.abs(viewBox[2]) * fontSize / 1000 : 0);
+      const height = svgDimensionInPixels(source.getAttribute('height'), fontSize)
+        || (viewBox.length === 4 ? Math.abs(viewBox[3]) * fontSize / 1000 : 0);
+      if (!width || !height) return null;
+
+      const result = { width, height, element: source.cloneNode(true) };
+      if (mathSvgCache.size >= 512) mathSvgCache.delete(mathSvgCache.keys().next().value);
+      mathSvgCache.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function measureRichTextWidth(value, font, fontSize) {
+    return splitMathText(value).reduce((width, segment) => {
+      if (segment.type === 'text') return width + measureText(segment.value, font);
+      const rendered = mathSvgMetrics(segment.value, fontSize);
+      const fallback = rendered ? rendered.width : measureText(mathFallbackText(segment.value), font);
+      return width + fallback;
+    }, 0);
+  }
+
+  function renderRichText(value, options) {
+    const {
+      className,
+      x = 0,
+      y = 0,
+      fill = '#233044',
+      fontSize,
+      fontWeight,
+      fontFamily = 'DM Sans, Manrope, sans-serif',
+    } = options;
+    const text = String(value ?? '');
+    const segments = splitMathText(text);
+    if (!segments.some((segment) => segment.type === 'math')) {
+      const output = svgElement('text', { class: className, x, y, fill, 'dominant-baseline': 'central' });
+      output.textContent = text;
+      return output;
+    }
+
+    const font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+    const totalWidth = measureRichTextWidth(text, font, fontSize);
+    const accessibleText = segments.map((segment) => (
+      segment.type === 'math' ? mathFallbackText(segment.value) : segment.value
+    )).join('');
+    const output = svgElement('g', {
+      class: className,
+      fill,
+      'font-family': fontFamily,
+      'font-size': `${fontSize}px`,
+      'font-weight': fontWeight,
+      'pointer-events': 'none',
+      'aria-label': accessibleText,
+    });
+    let cursor = -totalWidth / 2;
+
+    const appendPlainRun = (run) => {
+      if (!run) return;
+      const runWidth = measureText(run, font);
+      const textRun = svgElement('text', {
+        x: cursor,
+        y,
+        fill,
+        'text-anchor': 'start',
+        'dominant-baseline': 'central',
+      });
+      textRun.textContent = run;
+      output.appendChild(textRun);
+      cursor += runWidth;
+    };
+
+    segments.forEach((segment) => {
+      if (segment.type === 'text') {
+        appendPlainRun(segment.value);
+        return;
+      }
+      const rendered = mathSvgMetrics(segment.value, fontSize);
+      if (!rendered) {
+        appendPlainRun(mathFallbackText(segment.value));
+        return;
+      }
+      const mathSvg = rendered.element.cloneNode(true);
+      mathSvg.setAttribute('x', String(cursor));
+      mathSvg.setAttribute('y', String(y - rendered.height / 2));
+      mathSvg.setAttribute('width', String(rendered.width));
+      mathSvg.setAttribute('height', String(rendered.height));
+      mathSvg.setAttribute('color', fill);
+      mathSvg.removeAttribute('aria-hidden');
+      mathSvg.setAttribute('role', 'img');
+      mathSvg.setAttribute('aria-label', mathFallbackText(segment.value));
+      mathSvg.setAttribute('focusable', 'false');
+      output.appendChild(mathSvg);
+      cursor += rendered.width;
+    });
+    return output;
+  }
+
   function nodeRadiusFor(nodes) {
     if (!nodes.length) return 31;
     let widest = 0;
@@ -586,10 +752,10 @@
     nodes.forEach((node) => {
       const label = node.label || ' ';
       const weight = node.weight || '';
-      widest = Math.max(widest, measureText(label, '700 14px DM Sans, sans-serif'));
+      widest = Math.max(widest, measureRichTextWidth(label, '700 14px DM Sans, Manrope, sans-serif', 14));
       if (weight) {
         hasSecondaryLine = true;
-        widest = Math.max(widest, measureText(weight, '600 10.5px DM Sans, sans-serif'));
+        widest = Math.max(widest, measureRichTextWidth(weight, '600 10.5px DM Sans, Manrope, sans-serif', 10.5));
       }
     });
     return Math.max(30, widest / 2 + 18, hasSecondaryLine ? 31 : 0);
@@ -728,7 +894,7 @@
         class: 'edge-label',
         transform: `translate(${geometry.label.x} ${geometry.label.y})`,
       });
-      const textWidth = measureText(edge.weight, '700 12px DM Sans, sans-serif');
+      const textWidth = measureRichTextWidth(edge.weight, '700 12px DM Sans, Manrope, sans-serif', 12);
       const width = Math.max(31, textWidth + 17);
       labelGroup.appendChild(svgElement('rect', {
         class: 'edge-label-bg',
@@ -740,9 +906,12 @@
         stroke: edgeColor,
         'stroke-opacity': 0.26,
       }));
-      const labelText = svgElement('text', { class: 'edge-label-text', fill: '#3F4D63', x: 0, y: 0 });
-      labelText.textContent = edge.weight;
-      labelGroup.appendChild(labelText);
+      labelGroup.appendChild(renderRichText(edge.weight, {
+        className: 'edge-label-text',
+        fill: '#3F4D63',
+        fontSize: 12,
+        fontWeight: 700,
+      }));
       group.appendChild(labelGroup);
     }
     return group;
@@ -765,26 +934,22 @@
     }));
 
     const textColor = readableTextColor(node.color);
-    const label = svgElement('text', {
-      class: 'node-label',
-      x: 0,
+    group.appendChild(renderRichText(node.label || ' ', {
+      className: 'node-label',
       y: node.weight ? -4 : 1,
       fill: textColor,
-      'dominant-baseline': 'central',
-    });
-    label.textContent = node.label || ' ';
-    group.appendChild(label);
+      fontSize: 14,
+      fontWeight: 700,
+    }));
 
     if (node.weight) {
-      const weight = svgElement('text', {
-        class: 'node-weight',
-        x: 0,
+      group.appendChild(renderRichText(node.weight, {
+        className: 'node-weight',
         y: 13,
         fill: textColor,
-        'dominant-baseline': 'central',
-      });
-      weight.textContent = node.weight;
-      group.appendChild(weight);
+        fontSize: 10.5,
+        fontWeight: 600,
+      }));
     }
     return group;
   }
@@ -1386,8 +1551,8 @@
     const proposedRadius = Math.max(
       nodeRadiusFor(nodes),
       30,
-      measureText(label, '700 14px DM Sans, sans-serif') / 2 + 18,
-      weight ? measureText(weight, '600 10.5px DM Sans, sans-serif') / 2 + 18 : 0,
+      measureRichTextWidth(label, '700 14px DM Sans, Manrope, sans-serif', 14) / 2 + 18,
+      weight ? measureRichTextWidth(weight, '600 10.5px DM Sans, Manrope, sans-serif', 10.5) / 2 + 18 : 0,
     );
     const spacing = Math.max(150, proposedRadius * 2 + 42);
     for (let ring = 1; ring <= 20; ring += 1) {
@@ -2917,5 +3082,19 @@
     fitGraph();
   }
 
+  function refreshMathRendering() {
+    mathSvgCache.clear();
+    renderScene();
+  }
+
+  window.addEventListener('graph-studio-mathjax-ready', refreshMathRendering);
   init();
+  if (window.MathJax?.tex2svg) {
+    const mathJaxReady = window.MathJax.startup?.promise;
+    if (mathJaxReady && typeof mathJaxReady.then === 'function') {
+      mathJaxReady.then(refreshMathRendering).catch(() => {});
+    } else {
+      refreshMathRendering();
+    }
+  }
 })();
