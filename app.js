@@ -605,8 +605,12 @@
     return segments;
   }
 
+  function normalizeTexExpression(expression) {
+    return String(expression).replace(/[\\]{2,}(?=[a-zA-Z])/g, () => String.fromCharCode(92));
+  }
+
   function mathFallbackText(expression) {
-    return String(expression)
+    return normalizeTexExpression(expression)
       .replace(/\\not\s*=/g, '≠')
       .replace(/\\left\b|\\right\b/g, '')
       .replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '$1/$2')
@@ -638,11 +642,12 @@
   function mathSvgMetrics(expression, fontSize) {
     const mathJax = window.MathJax;
     if (!mathJax || typeof mathJax.tex2svg !== 'function') return null;
-    const cacheKey = `${fontSize}\u0000${expression}`;
+    const tex = normalizeTexExpression(expression);
+    const cacheKey = `${fontSize}\u0000${tex}`;
     if (mathSvgCache.has(cacheKey)) return mathSvgCache.get(cacheKey);
 
     try {
-      const wrapper = mathJax.tex2svg(expression, { display: false, em: fontSize, ex: fontSize / 2 });
+      const wrapper = mathJax.tex2svg(tex, { display: false, em: fontSize, ex: fontSize / 2 });
       const source = wrapper?.querySelector?.('svg') || (wrapper?.tagName?.toLowerCase() === 'svg' ? wrapper : null);
       if (!source) return null;
       const viewBox = (source.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
