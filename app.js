@@ -666,13 +666,22 @@
     }
   }
 
-  function measureRichTextWidth(value, font, fontSize) {
-    return splitMathText(value).reduce((width, segment) => {
-      if (segment.type === 'text') return width + measureText(segment.value, font);
+  function measureRichTextLayout(value, font, fontSize) {
+    const layout = { width: 0, height: fontSize };
+    splitMathText(value).forEach((segment) => {
+      if (segment.type === 'text') {
+        layout.width += measureText(segment.value, font);
+        return;
+      }
       const rendered = mathSvgMetrics(segment.value, fontSize);
-      const fallback = rendered ? rendered.width : measureText(mathFallbackText(segment.value), font);
-      return width + fallback;
-    }, 0);
+      layout.width += rendered ? rendered.width : measureText(mathFallbackText(segment.value), font);
+      if (rendered) layout.height = Math.max(layout.height, rendered.height);
+    });
+    return layout;
+  }
+
+  function measureRichTextWidth(value, font, fontSize) {
+    return measureRichTextLayout(value, font, fontSize).width;
   }
 
   function renderRichText(value, options) {
@@ -899,14 +908,15 @@
         class: 'edge-label',
         transform: `translate(${geometry.label.x} ${geometry.label.y})`,
       });
-      const textWidth = measureRichTextWidth(edge.weight, '700 12px DM Sans, Manrope, sans-serif', 12);
-      const width = Math.max(31, textWidth + 17);
+      const labelLayout = measureRichTextLayout(edge.weight, '700 12px DM Sans, Manrope, sans-serif', 12);
+      const width = Math.max(31, labelLayout.width + 17);
+      const height = Math.max(22, labelLayout.height + 10);
       labelGroup.appendChild(svgElement('rect', {
         class: 'edge-label-bg',
         x: -width / 2,
-        y: -11,
+        y: -height / 2,
         width,
-        height: 22,
+        height,
         rx: 7,
         stroke: edgeColor,
         'stroke-opacity': 0.26,
