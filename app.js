@@ -324,6 +324,12 @@
     }
   }
 
+  function insertCommandEntryAtFirstEmptyLine(entry) {
+    const emptyIndex = commandEntries.findIndex((line) => !line.kind && !line.text.trim());
+    if (emptyIndex >= 0) commandEntries[emptyIndex] = entry;
+    else commandEntries.push(entry);
+  }
+
   function synchronizeCommandEntries(beforeGraph, afterGraph) {
     const beforeNodes = new Map(beforeGraph.nodes.map((node) => [node.id, node]));
     const beforeEdges = new Map(beforeGraph.edges.map((edge) => [edge.id, edge]));
@@ -358,9 +364,9 @@
       const changedInCommand = !previous || previous.label !== node.label || previous.weight !== node.weight;
       if (!previous || changedInCommand) {
         if (!hasNodeEntry(node.id) && (!previous || !hasEntryForNode(node.id))) {
-          commandEntries.push(createNodeCommandEntry(node));
+          insertCommandEntryAtFirstEmptyLine(createNodeCommandEntry(node));
         } else if (previous && !hasNodeEntry(node.id) && (previous.label !== node.label || previous.weight !== node.weight)) {
-          commandEntries.push(createNodeCommandEntry(node));
+          insertCommandEntryAtFirstEmptyLine(createNodeCommandEntry(node));
         }
       }
     });
@@ -370,13 +376,13 @@
       const relevantChange = !previous || previous.from !== edge.from || previous.to !== edge.to
         || previous.directed !== edge.directed || previous.weight !== edge.weight;
       if ((!previous || relevantChange) && !hasEdgeEntry(edge.id)) {
-        commandEntries.push(createEdgeCommandEntry(edge));
+        insertCommandEntryAtFirstEmptyLine(createEdgeCommandEntry(edge));
       }
     });
 
     promotedNodeIds.forEach((nodeId) => {
       if (afterNodes.has(nodeId) && !hasEntryForNode(nodeId)) {
-        commandEntries.push(createNodeCommandEntry(afterNodes.get(nodeId)));
+        insertCommandEntryAtFirstEmptyLine(createNodeCommandEntry(afterNodes.get(nodeId)));
       }
     });
 
@@ -401,7 +407,6 @@
       }
     });
 
-    commandEntries = commandEntries.filter((entry) => entry.kind || entry.text.trim());
     writeCommandInput();
     persistCommandEntries();
   }
@@ -1349,7 +1354,13 @@
     const possibleOrphanIds = new Set();
 
     removedEntries.forEach((entry) => {
-      if (entry.kind === 'node') entry.nodeIds.forEach((id) => deletedNodeIds.add(id));
+      if (entry.kind === 'node') {
+        entry.nodeIds.forEach((id) => {
+          const hasOtherNodeLine = candidateEntries.some((candidate) => !removedEntryIds.has(candidate.id)
+            && candidate.kind === 'node' && candidate.nodeIds.includes(id));
+          if (!hasOtherNodeLine) deletedNodeIds.add(id);
+        });
+      }
       if (entry.kind === 'edge') {
         entry.edgeIds.forEach((id) => deletedEdgeIds.add(id));
         entry.createdNodeIds.forEach((id) => possibleOrphanIds.add(id));
@@ -1455,15 +1466,36 @@
 
   function appendPendingCommandLine(text) {
     reconcileCommandInput();
-    const last = commandEntries[commandEntries.length - 1];
-    if (last && !last.kind && !last.text.trim()) last.text = text;
-    else commandEntries.push(createCommandEntry(text));
+    insertCommandEntryAtFirstEmptyLine(createCommandEntry(text));
     writeCommandInput();
     persistCommandEntries();
   }
 
-  function applyBulkInput() {
+  function commandLineIndexAt(offset) {
+    const position = Math.max(0, Math.min(Number(offset) || 0, commandInput.value.length));
+    return (commandInput.value.slice(0, position).match(/\n/g) || []).length;
+  }
+
+  function pendingCommandIdsThrough(lineIndex) {
+    return commandEntries.slice(0, lineIndex + 1)
+      .filter((entry) => entry.text.trim() && (!entry.kind || entry.text !== entry.appliedText))
+      .map((entry) => entry.id);
+  }
+
+  function commandEntryIsComplete(entry) {
+    try {
+      const count = tokenizeCommandLine(entry.text).length;
+      if (entry.kind === 'node') return count >= 1 && count <= 2;
+      if (entry.kind === 'edge') return count >= 3 && count <= 4;
+      return count >= 1 && count <= 4;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function applyBulkInput(entryIds = null) {
     reconcileCommandInput();
+    const targetIds = entryIds ? new Set(entryIds) : null;
     const draft = clone(graph);
     const nextEntries = clone(commandEntries);
     const errors = [];
@@ -1474,6 +1506,7 @@
     let updatedCommands = 0;
 
     nextEntries.forEach((entry, index) => {
+      if (targetIds && !targetIds.has(entry.id)) return;
       if (!entry.text.trim()) return;
       const currentNode = entry.kind === 'node'
         ? draft.nodes.find((node) => entry.nodeIds.includes(node.id))
@@ -1523,8 +1556,19 @@
           entry.createdNodeIds = [currentNode.id];
           entry.edgeIds = [];
         } else {
-          if (draft.nodes.some((node) => node.label === label || node.id === label)) {
-            errors.push(`第 ${index + 1} 行：顶点「${label}」已存在`);
+          const duplicate = draft.nodes.find((node) => node.id === label)
+            || draft.nodes.find((node) => node.label === label);
+          if (duplicate) {
+            if (tokens.length === 2) {
+              duplicate.weight = weight;
+              updatedNodes += 1;
+            }
+            entry.kind = 'node';
+            entry.nodeIds = [duplicate.id];
+            entry.createdNodeIds = [duplicate.id];
+            entry.edgeIds = [];
+            entry.appliedText = entry.text;
+            updatedCommands += 1;
             return;
           }
           const id = createUniqueId('v', draft.nodes);
@@ -2151,9 +2195,30 @@
     });
     commandInput.addEventListener('input', reconcileCommandInput);
     commandInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-        event.preventDefault();
-        if (commandInput.value.trim()) applyBulkInput();
+      if (event.isComposing) return;
+      if (event.key === 'Enter') {
+        reconcileCommandInput();
+        const lines = commandInput.value.split(/\r?\n/);
+        let lineIndex = commandLineIndexAt(commandInput.selectionStart);
+        if (!lines[lineIndex]?.trim() && lineIndex > 0) lineIndex -= 1;
+        const entryIds = pendingCommandIdsThrough(lineIndex);
+        if (!entryIds.length) return;
+        window.setTimeout(() => {
+          reconcileCommandInput();
+          const stillPending = entryIds.filter((id) => commandEntries.some((entry) => entry.id === id
+            && entry.text.trim() && (!entry.kind || entry.text !== entry.appliedText)));
+          if (stillPending.length) applyBulkInput(stillPending);
+        }, 0);
+      } else if (event.key === 'Backspace') {
+        const previousValue = commandInput.value;
+        window.setTimeout(() => {
+          if (previousValue === commandInput.value) return;
+          reconcileCommandInput();
+          const lineIndex = commandLineIndexAt(commandInput.selectionStart);
+          const entry = commandEntries[lineIndex];
+          if (entry?.text.trim() && commandEntryIsComplete(entry)
+            && (!entry.kind || entry.text !== entry.appliedText)) applyBulkInput([entry.id]);
+        }, 0);
       }
     });
     $('#import-button').addEventListener('click', () => hiddenFileInput.click());
